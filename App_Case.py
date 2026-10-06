@@ -12,7 +12,7 @@ st.set_page_config(page_title="Catalogo Case in Affitto", layout="wide")
 
 FILE_CSV_LOCALE = "case_in_affitto.csv"
 
-# 1. AGGIORNAMENTO COLONNE (Titolo all'inizio, Voti, Visita, Link alla fine)
+# Aggiunta la colonna "Note" prima di "Link"
 COLONNE = [
     "Titolo Casa",
     "Data Inserimento",
@@ -33,6 +33,7 @@ COLONNE = [
     "Metro Vicina",
     "Linea Metro",
     "Fermata Metro",
+    "Note",
     "Link",
 ]
 
@@ -59,10 +60,12 @@ def carica_dati():
                     if col not in df.columns:
                         if col == "Visita Effettuata": df[col] = False
                         elif col == "Voto": df[col] = 0.0
+                        elif col == "Note": df[col] = ""
                         else: df[col] = "N/D"
                 # Forza i tipi corretti per la tabella
                 df["Visita Effettuata"] = df["Visita Effettuata"].astype(bool)
                 df["Voto"] = pd.to_numeric(df["Voto"], errors='coerce').fillna(0.0)
+                df["Note"] = df["Note"].fillna("")
                 
                 return df[COLONNE]
         except Exception:
@@ -77,10 +80,12 @@ def carica_dati():
             if col not in df.columns:
                 if col == "Visita Effettuata": df[col] = False
                 elif col == "Voto": df[col] = 0.0
+                elif col == "Note": df[col] = ""
                 else: df[col] = "N/D"
         # Forza i tipi corretti per la tabella
         df["Visita Effettuata"] = df["Visita Effettuata"].astype(bool)
         df["Voto"] = pd.to_numeric(df["Voto"], errors='coerce').fillna(0.0)
+        df["Note"] = df["Note"].fillna("")
         
         return df[COLONNE]
 
@@ -267,8 +272,8 @@ st.write(
 with st.sidebar:
     st.header("➕ Aggiungi Nuova Casa")
     
-    # Nuovi campi aggiunti
     titolo_casa = st.text_input("Titolo Casa", placeholder="Es. Trilocale Piazza Bologna")
+    note_casa = st.text_area("Note / Impressioni", placeholder="Es. Molto luminosa, cucina piccola...")
     link = st.text_input("Link (opzionale)")
     visita_data = st.text_input(
         "Giorno e Ora Visita", placeholder="Es. Martedì 14/10 ore 18:00"
@@ -279,12 +284,12 @@ with st.sidebar:
         if testo_annuncio.strip():
             dati = estrai_dati(testo_annuncio)
             
-            # Compilazione nuovi campi e struttura
             dati["Titolo Casa"] = titolo_casa if titolo_casa else "Nuova Casa"
             dati["Data Inserimento"] = datetime.now().strftime("%Y-%m-%d %H:%M")
             dati["Giorno/Ora Visita"] = visita_data if visita_data else "Da programmare"
             dati["Visita Effettuata"] = False
             dati["Voto"] = 0.0
+            dati["Note"] = note_casa if note_casa else ""
             dati["Link"] = link if link else "-"
 
             df_attuale = carica_dati()
@@ -301,7 +306,6 @@ df_case = carica_dati()
 st.subheader(f"📋 Case in Catalogo ({len(df_case)})")
 
 if not df_case.empty:
-    # 2. CONFIGURAZIONE TABELLA PER MOSTRARE CHECKBOX E VOTI CORRETTAMENTE
     edited_df = st.data_editor(
         df_case,
         num_rows="dynamic",
@@ -320,6 +324,11 @@ if not df_case.empty:
                 max_value=10.0,
                 step=0.5,
                 format="%.1f",
+            ),
+            "Note": st.column_config.TextColumn(
+                "Note",
+                help="Note e impressioni personali",
+                width="large",
             ),
             "Link": st.column_config.LinkColumn(
                 "Link",
