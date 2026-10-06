@@ -104,8 +104,14 @@ def salva_dati(df):
         return True
 
 
+import json
+import traceback
+import requests
+import streamlit as st
+
+
 def estrai_dati(testo):
-    """Estrae le informazioni dall'annuncio usando l'API di Gemini (modello gemini-3.8-flash)."""
+    """Funzione con log dettagliato per il debug."""
     raw_key = st.secrets.get("GEMINI_API_KEY", "")
     api_key = str(raw_key).strip().strip("'").strip('"')
 
@@ -113,43 +119,15 @@ def estrai_dati(testo):
         st.error("Chiave API di Gemini mancante nei Secrets!")
         return {}
 
-    # Endpoint aggiornato al modello gemini-3.8-flash
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
+    # Proviamo con l'endpoint ufficiale standard
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
 
     headers = {
         "x-goog-api-key": api_key,
         "Content-Type": "application/json",
     }
 
-    prompt = f"""
-    Sei un assistente esperto in immobili a Roma. Analizza il seguente annuncio di affitto ed estrai le informazioni.
-    Rispondi TASSATIVAMENTE ed ESCLUSIVAMENTE con un oggetto JSON valido (senza blocchi markdown ```json).
-
-    Formato JSON richiesto:
-    {{
-      "Prezzo Immobile (€)": float (solo numero dell'affitto base, es: 850.0),
-      "Spese (€)": float (spese condominiali/utenze se menzionate, altrimenti 0.0),
-      "Metri Quadri (m²)": int o stringa ("N/D" se assente),
-      "Piano": stringa (es: "3° piano", "Piano terra", "Attico", o "N/D"),
-      "Ascensore": stringa ("Sì", "No", o "N/D"),
-      "Riscaldamento": stringa ("Autonomo", "Centralizzato", o "N/D"),
-      "Condizionatore": stringa ("Sì", "No", o "N/D"),
-      "Numero Vani": stringa (es: "Bilocale", "3 locali", "N/D"),
-      "Classe Energetica": stringa (es: "A1", "G", "N/D"),
-      "Stazione Treno": stringa (es: "Stazione Tiburtina", "Sì", "N/D"),
-      "Metro Vicina": stringa ("Sì", "No", o "N/D"),
-      "Linea Metro": stringa ("Linea A", "Linea B", "Linea B1", "Linea C", o "N/D"),
-      "Fermata Metro": stringa (nome della fermata più vicina trovata o dedotta, es: "Bologna", "N/D")
-    }}
-
-    Regole:
-    - Tollerare errori di battitura (es. "spesy condominialz", "ascnsore").
-    - Se l'annuncio cita luoghi noti o piazze vicine (es. "vicino Piazza Bologna"), deduci la metro/fermata corretta se evidente.
-
-    Testo annuncio:
-    \"\"\"{testo}\"\"\"
-    """
-
+    prompt = f"Estrai dati in JSON da questo annuncio: {testo}"
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
 
     try:
@@ -158,31 +136,20 @@ def estrai_dati(testo):
         )
 
         if response.status_code != 200:
-            st.error(
-                f"Errore API Gemini ({response.status_code}): {response.text}"
-            )
+            st.error(f"Errore HTTP {response.status_code}:")
+            # Mostra la risposta esatta di Google a schermo
+            st.code(response.text, language="json")
             return {}
 
         data = response.json()
-        testo_risposta = data["candidates"][0]["content"]["parts"][0][
-            "text"
-        ].strip()
-
-        if testo_risposta.startswith("```"):
-            testo_risposta = (
-                testo_risposta.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-            )
-
-        dati_estratti = json.loads(testo_risposta)
-
-        prezzo = float(dati_estratti.get("Prezzo Immobile (€)", 0.0))
-        spese = float(dati_estratti.get("Spese (€)", 0.0))
-        dati_estratti["Prezzo Totale (€)"] = prezzo + spese
-
-        return dati_estratti
+        st.success("Chiamata riuscita!")
+        st.write(data)
+        return data
 
     except Exception as e:
-        st.error(f"Errore durante l'estrazione con LLM: {e}")
+        st.error("Si è verificata un'eccezione Python:")
+        # Mostra il traceback completo
+        st.code(traceback.format_exc())
         return {}
 
 # Interfaccia Streamlit
