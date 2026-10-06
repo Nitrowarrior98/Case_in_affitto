@@ -119,11 +119,10 @@ def estrai_dati(testo):
         st.error("Chiave API di Gemini mancante nei Secrets!")
         return {}
 
-    # Proviamo con l'endpoint ufficiale standard
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+    # MODO PIÙ SICURO: passiamo la chiave API direttamente nell'URL
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
 
     headers = {
-        "x-goog-api-key": api_key,
         "Content-Type": "application/json",
     }
 
@@ -135,9 +134,10 @@ def estrai_dati(testo):
             url, headers=headers, json=payload, timeout=15
         )
 
+        # Se il codice di risposta NON è 200 (OK), allora c'è un errore
         if response.status_code != 200:
-            st.error(f"Errore HTTP {response.status_code}:")
-            # Mostra la risposta esatta di Google a schermo
+            st.error(f"Errore HTTP {response.status_code} dal server di Google:")
+            # Questo mostrerà la risposta ESATTA di Google a schermo!
             st.code(response.text, language="json")
             return {}
 
@@ -147,8 +147,8 @@ def estrai_dati(testo):
         return data
 
     except Exception as e:
-        st.error("Si è verificata un'eccezione Python:")
-        # Mostra il traceback completo
+        st.error("Si è verificata un'eccezione Python (Errore nel codice o di connessione):")
+        # Questo mostra il log di errore interno di Python
         st.code(traceback.format_exc())
         return {}
 
