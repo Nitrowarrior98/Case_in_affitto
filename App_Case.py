@@ -277,4 +277,98 @@ with st.sidebar:
 
     max_prezzo_possibile = max(max_prezzo_possibile, 1500)
 
-    filtro_prezzo_max = st.slider("Prezzo Totale Max (€)", 500, max_prezzo_possibile, max
+    filtro_prezzo_max = st.slider("Prezzo Totale Max (€)", 500, max_prezzo_possibile, max_prezzo_possibile, step=50)
+    filtro_solo_da_visitare = st.checkbox("Mostra solo case da visitare")
+    filtro_voto_min = st.slider("Voto Minimo", 0.0, 10.0, 0.0, step=0.5)
+
+
+# --- DASHBOARD KPI ---
+if not df_case.empty:
+    st.markdown("### 📊 Panoramica Rapida")
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+
+    totale_case = len(df_case)
+    prezzi_validi = df_case[df_case["Prezzo Totale (€)"] > 0]["Prezzo Totale (€)"]
+    prezzo_medio = prezzi_validi.mean() if not prezzi_validi.empty else 0.0
+
+    visite_fatte = int(df_case["Visita Effettuata"].sum())
+
+    voti_validi = df_case[df_case["Voto"] > 0]["Voto"]
+    voto_medio = voti_validi.mean() if not voti_validi.empty else 0.0
+
+    kpi1.metric("Case in Catalogo", f"{totale_case}")
+    kpi2.metric("Prezzo Totale Medio", f"€ {prezzo_medio:.0f}" if prezzo_medio > 0 else "N/D")
+    kpi3.metric("Visite Effettuate", f"{visite_fatte} / {totale_case}")
+    kpi4.metric("Voto Medio", f"{voto_medio:.1f} ⭐" if voto_medio > 0 else "N/D")
+
+    st.divider()
+
+
+# --- FILTRAGGIO E TABELLA ---
+df_filtrato = df_case.copy()
+
+if ricerca_testo:
+    df_filtrato = df_filtrato[
+        df_filtrato["Titolo Casa"].str.contains(ricerca_testo, case=False, na=False)
+        | df_filtrato["Note"].str.contains(ricerca_testo, case=False, na=False)
+    ]
+
+df_filtrato = df_filtrato[df_filtrato["Prezzo Totale (€)"] <= filtro_prezzo_max]
+
+if filtro_solo_da_visitare:
+    df_filtrato = df_filtrato[df_filtrato["Visita Effettuata"] == False]
+
+if filtro_voto_min > 0:
+    df_filtrato = df_filtrato[df_filtrato["Voto"] >= filtro_voto_min]
+
+
+st.subheader(f"📋 Case in Catalogo ({len(df_filtrato)} filtrate su {len(df_case)} totali)")
+
+if not df_case.empty:
+    edited_df = st.data_editor(
+        df_filtrato,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="data_editor",
+        column_config={
+            "Visita Effettuata": st.column_config.CheckboxColumn(
+                "Visita Effettuata",
+                help="Spunta questa casella se hai già visto la casa",
+                default=False,
+            ),
+            "Voto": st.column_config.NumberColumn(
+                "Voto",
+                help="Dai un voto da 0 a 10 (con scatti di 0.5)",
+                min_value=0.0,
+                max_value=10.0,
+                step=0.5,
+                format="%.1f",
+            ),
+            "Prezzo al m² (€/m²)": st.column_config.NumberColumn(
+                "Prezzo al m² (€/m²)",
+                help="Calcolato automaticamente",
+                format="€ %.2f",
+            ),
+            "Note": st.column_config.TextColumn(
+                "Note",
+                help="Note e impressioni personali",
+                width="large",
+            ),
+            "Link": st.column_config.LinkColumn(
+                "Link",
+                help="Clicca per aprire l'annuncio",
+            ),
+        },
+    )
+
+    if st.button("💾 Salva Modifiche Tabella", type="primary"):
+        df_completo = df_case.copy()
+        for idx, row in edited_df.iterrows():
+            if idx in df_completo.index:
+                df_completo.loc[idx] = row
+
+        if salva_dati(df_completo):
+            st.success("Sincronizzato con il database!")
+            st.rerun()
+else:
+    st.info("Nessuna casa ancora salvata. Incolla il primo annuncio dalla barra laterale!")
