@@ -166,7 +166,7 @@ def salva_dati(df):
         salvato = True
 
     if salvato:
-        st.cache_data.clear()
+        st.cache_data.clear()  # Forza il riaggiornamento immediato dei dati in memoria
     return salvato
 
 
@@ -223,4 +223,182 @@ def estrai_dati(testo):
 
     treno_match = RE_TRENO.search(testo_lower)
     if treno_match:
-        stazione_treno = treno_
+        stazione_treno = treno_match.group(0).strip().title()
+    elif any(k in testo_lower for k in ["stazione", "treno", "ferrovia", "fs"]):
+        stazione_treno = "Sì (Vicina)"
+    else:
+        stazione_treno = "N/D"
+
+    tel_match = RE_TEL.search(testo)
+    contatto_telefono = tel_match.group(0).strip() if tel_match else "N/D"
+
+    return {
+        "Prezzo Immobile (€)": prezzo,
+        "Spese (€)": spese,
+        "Prezzo Totale (€)": prezzo_totale,
+        "Metri Quadri (m²)": mq,
+        "Piano": piano,
+        "Ascensore": ascensore,
+        "Riscaldamento": riscaldamento,
+        "Condizionatore": condizionatore,
+        "Numero Vani": vani,
+        "Classe Energetica": classe_energetica,
+        "Stazione Treno": stazione_treno,
+        "Metro Vicina": has_metro,
+        "Linea Metro": linea_metro,
+        "Fermata Metro": fermata_metro,
+        "Contatto Telefonico": contatto_telefono,
+    }
+
+
+# --- INTERFACCIA STREAMLIT ---
+st.title("🏠 Catalogo & Gestione Case in Affitto")
+st.write("Incolla l'annuncio a sinistra o modifica direttamente le celle della tabella in basso.")
+
+df_case = carica_dati()
+
+# --- BARRA LATERALE (AGGIUNTA E FILTRI) ---
+with st.sidebar:
+    st.header("➕ Aggiungi Nuova Casa")
+    titolo_casa = st.text_input("Titolo Casa", placeholder="Es. Trilocale Piazza Bologna")
+    contatto_tel = st.text_input("Contatto Telefonico", placeholder="Es. 333 1234567 (opzionale)")
+    note_casa = st.text_area("Note / Impressioni", placeholder="Es. Molto luminosa, cucina piccola...")
+    link = st.text_input("Link (opzionale)")
+    visita_data = st.text_input("Giorno e Ora Visita", placeholder="Es. Martedì 14/10 ore 18:00")
+    testo_annuncio = st.text_area("Incolla qui il testo dell'annuncio", height=180)
+
+    if st.button("Analizza e Salva", type="primary"):
+        if testo_annuncio.strip():
+            dati = estrai_dati(testo_annuncio)
+
+            dati["Titolo Casa"] = titolo_casa if titolo_casa else "Nuova Casa"
+            if contatto_tel.strip():
+                dati["Contatto Telefonico"] = contatto_tel.strip()
+            dati["Data Inserimento"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            dati["Giorno/Ora Visita"] = visita_data if visita_data else "Da programmare"
+            dati["Visita Effettuata"] = False
+            dati["Voto"] = 0.0
+            dati["Note"] = note_casa if note_casa else ""
+            dati["Link"] = link if link else "-"
+
+            df_nuovo = pd.concat([pd.DataFrame([dati]), df_case], ignore_index=True)[COLONNE]
+
+            if salva_dati(df_nuovo):
+                st.success("Immobile salvato nel catalogo condiviso!")
+                st.rerun()
+        else:
+            st.error("Inserisci il testo prima di salvare.")
+
+    st.divider()
+
+    st.header("🔍 Filtri Rapidi")
+    ricerca_testo = st.text_input("Cerca nel titolo, note o telefono", "")
+
+    if not df_case.empty:
+        max_p = df_case["Prezzo Totale (€)"].max()
+        max_prezzo_possibile = int(max_p) + 500 if pd.notna(max_p) and max_p > 0 else 2500
+    else:
+        max_prezzo_possibile = 2500
+
+    max_prezzo_possibile = max(max_prezzo_possibile, 1500)
+
+    filtro_prezzo_max = st.slider("Prezzo Totale Max (€)", 500, max_prezzo_possibile, max_prezzo_possibile, step=50)
+    filtro_solo_da_visitare = st.checkbox("Mostra solo case da visitare")
+    filtro_voto_min = st.slider("Voto Minimo", 0.0, 10.0, 0.0, step=0.5)
+
+
+# --- DASHBOARD KPI ---
+if not df_case.empty:
+    st.markdown("### 📊 Panoramica Rapida")
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+
+    totale_case = len(df_case)
+    prezzi_validi = df_case[df_case["Prezzo Totale (€)"] > 0]["Prezzo Totale (€)"]
+    prezzo_medio = prezzi_validi.mean() if not prezzi_validi.empty else 0.0
+
+    visite_fatte = int(df_case["Visita Effettuata"].sum())
+
+    voti_validi = df_case[df_case["Voto"] > 0]["Voto"]
+    voto_medio = voti_validi.mean() if not voti_validi.empty else 0.0
+
+    kpi1.metric("Case in Catalogo", f"{totale_case}")
+    kpi2.metric("Prezzo Totale Medio", f"€ {prezzo_medio:.0f}" if prezzo_medio > 0 else "N/D")
+    kpi3.metric("Visite Effettuate", f"{visite_fatte} / {totale_case}")
+    kpi4.metric("Voto Medio", f"{voto_medio:.1f} ⭐" if voto_medio > 0 else "N/D")
+
+    st.divider()
+
+
+# --- FILTRAGGIO E TABELLA ---
+df_filtrato = df_case.copy()
+
+if ricerca_testo:
+    df_filtrato = df_filtrato[
+        df_filtrato["Titolo Casa"].str.contains(ricerca_testo, case=False, na=False)
+        | df_filtrato["Note"].str.contains(ricerca_testo, case=False, na=False)
+        | df_filtrato["Contatto Telefonico"].str.contains(ricerca_testo, case=False, na=False)
+    ]
+
+df_filtrato = df_filtrato[df_filtrato["Prezzo Totale (€)"] <= filtro_prezzo_max]
+
+if filtro_solo_da_visitare:
+    df_filtrato = df_filtrato[df_filtrato["Visita Effettuata"] == False]
+
+if filtro_voto_min > 0:
+    df_filtrato = df_filtrato[df_filtrato["Voto"] >= filtro_voto_min]
+
+
+st.subheader(f"📋 Case in Catalogo ({len(df_filtrato)} filtrate su {len(df_case)} totali)")
+
+if not df_case.empty:
+    edited_df = st.data_editor(
+        df_filtrato,
+        num_rows="dynamic",
+        use_container_width=True,
+        key="data_editor",
+        column_config={
+            "Visita Effettuata": st.column_config.CheckboxColumn(
+                "Visita Effettuata",
+                help="Spunta questa casella se hai già visto la casa",
+                default=False,
+            ),
+            "Contatto Telefonico": st.column_config.TextColumn(
+                "Contatto Telefonico",
+                help="Numero di telefono del proprietario o agenzia",
+            ),
+            "Voto": st.column_config.NumberColumn(
+                "Voto",
+                help="Dai un voto da 0 a 10 (con scatti di 0.5)",
+                min_value=0.0,
+                max_value=10.0,
+                step=0.5,
+                format="%.1f",
+            ),
+            "Prezzo al m² (€/m²)": st.column_config.NumberColumn(
+                "Prezzo al m² (€/m²)",
+                help="Calcolato automaticamente",
+                format="€ %.2f",
+            ),
+            "Note": st.column_config.TextColumn(
+                "Note",
+                help="Note e impressioni personali",
+                width="large",
+            ),
+            "Link": st.column_config.LinkColumn(
+                "Link",
+                help="Clicca per aprire l'annuncio",
+            ),
+        },
+    )
+
+    if st.button("💾 Salva Modifiche Tabella", type="primary"):
+        df_completo = df_case.copy()
+        for idx, row in edited_df.iterrows():
+            if idx in df_completo.index:
+                df_completo.loc[idx] = row
+
+        if salva_dati(df_completo):
+            st.success("Sincronizzato con il database!")
+            st.rerun()
+else:
+    st.info("Nessuna casa ancora salvata. Incolla il primo annuncio dalla barra laterale!")
