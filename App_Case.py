@@ -180,7 +180,7 @@ def estrai_dati(testo):
     try:
         genai.configure(api_key=api_key)
 
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-3.5-flash-lite")
 
         prompt = f"""
         Sei un assistente immobiliare esperto. Analizza il seguente annuncio di affitto ed estrai le informazioni.
