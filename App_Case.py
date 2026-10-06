@@ -1,12 +1,13 @@
 import base64
 import io
-import os
 import json
+import os
+import re
 from datetime import datetime
+import google.generativeai as genai
 import pandas as pd
 import requests
 import streamlit as st
-import google.generativeai as genai
 
 # Configurazione Pagina
 st.set_page_config(page_title="Catalogo Case in Affitto", layout="wide")
@@ -48,6 +49,7 @@ COLONNE_NUMERICHE = [
     "Voto",
 ]
 
+
 def get_github_credentials():
     """Recupera le credenziali in modo sicuro senza far crashare l'app."""
     try:
@@ -57,6 +59,7 @@ def get_github_credentials():
         pass
     return None, None
 
+
 def calcola_prezzo_mq(df):
     if df.empty:
         return df
@@ -64,6 +67,7 @@ def calcola_prezzo_mq(df):
     mq = pd.to_numeric(df["Metri Quadri (m²)"], errors="coerce").fillna(0.0)
     df["Prezzo al m² (€/m²)"] = (prezzo_tot / mq).where(mq > 0, 0.0).round(2)
     return df
+
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _scarica_dati_raw():
@@ -117,11 +121,13 @@ def _scarica_dati_raw():
     df = calcola_prezzo_mq(df)
     return df[COLONNE], sha
 
+
 def carica_dati():
     df, sha = _scarica_dati_raw()
     if sha:
         st.session_state["sha"] = sha
     return df.copy()
+
 
 def salva_dati(df):
     df = calcola_prezzo_mq(df)
@@ -166,18 +172,6 @@ def salva_dati(df):
 
 def estrai_dati(testo):
     """Analizza l'annuncio usando Gemini API ed estrae un dizionario pulito."""
-    
-    # Valori di fallback in caso di errore
-    fallback_dati = {
-        "Prezzo Immobile (€)": 0.0, "Spese (€)": 0.0, "Prezzo Totale (€)": 0.0,
-        "Metri Quadri (m²)": 0.0, "Piano": "N/D", "Ascensore": "N/D",
-        "Riscaldamento": "N/D", "Condizionatore": "N/D", "Numero Vani": "N/D",
-        "Classe Energetica": "N/D", "Stazione Treno": "N/D", "Metro Vicina": "N/D",
-        "Linea Metro": "N/D", "Fermata Metro": "N/D", "Contatto Telefonico": "N/D",
-    }
-    
-    try:def estrai_dati(testo):
-    """Analizza l'annuncio usando Gemini API ed estrae un dizionario pulito."""
     api_key = st.secrets.get("GEMINI_API_KEY")
     if not api_key:
         st.error("⚠️ GEMINI_API_KEY non trovata nei Secrets di Streamlit.")
@@ -185,10 +179,9 @@ def estrai_dati(testo):
 
     try:
         genai.configure(api_key=api_key)
-        
-        # Se preferisci, puoi usare anche 'gemini-2.0-flash'
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
+
+        model = genai.GenerativeModel("gemini-1.5-flash")
+
         prompt = f"""
         Sei un assistente immobiliare esperto. Analizza il seguente annuncio di affitto ed estrai le informazioni.
         Rispondi SOLO ed ESCLUSIVAMENTE con un oggetto JSON valido, usando esattamente le seguenti chiavi:
@@ -218,11 +211,10 @@ def estrai_dati(testo):
                 prompt,
                 generation_config={
                     "response_mime_type": "application/json",
-                    "temperature": 0.1
-                }
+                    "temperature": 0.1,
+                },
             )
 
-            # Sanitizzazione del testo per rimuovere eventuali blocchi di codice markdown
             res_text = response.text.strip()
             if res_text.startswith("```"):
                 res_text = re.sub(r"^```(?:json)?\n?", "", res_text)
@@ -276,7 +268,6 @@ with st.sidebar:
         if testo_annuncio.strip():
             dati = estrai_dati(testo_annuncio)
 
-            # Prosegue con il salvataggio SOLO se l'estrazione è andata a buon fine
             if dati is not None:
                 dati["Titolo Casa"] = titolo_casa if titolo_casa else "Nuova Casa"
                 if contatto_tel.strip():
@@ -296,7 +287,7 @@ with st.sidebar:
                     st.rerun()
         else:
             st.error("Inserisci il testo prima di salvare.")
-            
+
     st.divider()
 
     st.header("🔍 Filtri Rapidi")
