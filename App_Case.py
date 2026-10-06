@@ -76,4 +76,28 @@ def _scarica_dati_raw():
         try:
             token = st.secrets["GITHUB_TOKEN"]
             repo = st.secrets["GITHUB_REPO"]
-            url = f"
+            url = f"https://api.github.com/repos/{repo}/contents/case_in_affitto.csv"
+            headers = {"Authorization": f"token {token}"}
+            res = requests.get(url, headers=headers)
+            if res.status_code == 200:
+                content_json = res.json()
+                csv_text = base64.b64decode(content_json["content"]).decode("utf-8")
+                df = pd.read_csv(io.StringIO(csv_text))
+                sha = content_json["sha"]
+        except Exception:
+            pass
+
+    if df is None and os.path.exists(FILE_CSV_LOCALE):
+        try:
+            df = pd.read_csv(FILE_CSV_LOCALE)
+        except Exception:
+            pass
+
+    if df is None:
+        df = pd.DataFrame(columns=COLONNE)
+
+    # Inizializzazione e sanitizzazione rapida
+    for col in COLONNE:
+        if col not in df.columns:
+            if col == "Visita Effettuata":
+                df
