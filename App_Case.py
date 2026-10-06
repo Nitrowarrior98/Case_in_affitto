@@ -99,3 +99,128 @@ def _scarica_dati_raw():
     # Inizializzazione e sanitizzazione rapida
     for col in COLONNE:
         if col not in df.columns:
+            if col == "Visita Effettuata":
+                df[col] = False
+            elif col in COLONNE_NUMERICHE:
+                df[col] = 0.0
+            elif col in ["Note", "Contatto Telefonico"]:
+                df[col] = ""
+            else:
+                df[col] = "N/D"
+
+    for col in COLONNE_NUMERICHE:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
+    df["Visita Effettuata"] = df["Visita Effettuata"].apply(
+        lambda x: True if str(x).lower() in ["true", "1", "sì", "si"] or x is True else False
+    )
+
+    df["Note"] = df["Note"].fillna("")
+    df["Contatto Telefonico"] = df["Contatto Telefonico"].astype(str).fillna("N/D")
+
+    df = calcola_prezzo_mq(df)
+    return df[COLONNE], sha
+
+
+def carica_dati():
+    """Interfaccia pulita per caricare i dati gestendo la cache e lo SHA di GitHub."""
+    df, sha = _scarica_dati_raw()
+    if sha:
+        st.session_state["sha"] = sha
+    return df.copy()
+
+
+def salva_dati(df):
+    """Salva il DataFrame e svuota la cache per aggiornare la memoria dell'app."""
+    df = calcola_prezzo_mq(df)
+
+    salvato = False
+    if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
+        try:
+            token = st.secrets["GITHUB_TOKEN"]
+            repo = st.secrets["GITHUB_REPO"]
+            url = f"https://api.github.com/repos/{repo}/contents/case_in_affitto.csv"
+            headers = {"Authorization": f"token {token}"}
+
+            csv_buffer = io.StringIO()
+            df.to_csv(csv_buffer, index=False)
+            content_b64 = base64.b64encode(csv_buffer.getvalue().encode("utf-8")).decode("utf-8")
+
+            payload = {
+                "message": f"Aggiornamento catalogo {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                "content": content_b64,
+            }
+            if "sha" in st.session_state and st.session_state["sha"]:
+                payload["sha"] = st.session_state["sha"]
+
+            res = requests.put(url, headers=headers, json=payload)
+            if res.status_code in [200, 201]:
+                st.session_state["sha"] = res.json()["content"]["sha"]
+                salvato = True
+            else:
+                st.error(f"Errore salvataggio GitHub: {res.status_code}")
+        except Exception as e:
+            st.error(f"Errore connessione GitHub: {e}")
+    else:
+        df.to_csv(FILE_CSV_LOCALE, index=False)
+        salvato = True
+
+    if salvato:
+        st.cache_data.clear()
+    return salvato
+
+
+def estrai_dati(testo):
+    testo_lower = testo.lower()
+
+    prezzo_match = RE_PREZZO.search(testo_lower)
+    prezzo = 0.0
+    if prezzo_match:
+        p_str = (prezzo_match.group(1) or prezzo_match.group(2)).replace(".", "")
+        try:
+            prezzo = float(p_str)
+        except ValueError:
+            prezzo = 0.0
+
+    spese_match = RE_SPESE.search(testo_lower)
+    spese = float(spese_match.group(1)) if spese_match else 0.0
+    prezzo_totale = prezzo + spese
+
+    mq_match = RE_MQ.search(testo_lower)
+    mq = float(mq_match.group(1)) if mq_match else 0.0
+
+    piano_match = RE_PIANO.search(testo_lower)
+    piano = piano_match.group(0).capitalize() if piano_match else "N/D"
+
+    ascensore = "N/D"
+    if "ascensore" in testo_lower:
+        ascensore = "No" if re.search(r"(senza|no|privo di)\s+ascensore", testo_lower) else "Sì"
+
+    riscaldamento = "N/D"
+    if "autonomo" in testo_lower:
+        riscaldamento = "Autonomo"
+    elif "centralizzato" in testo_lower:
+        riscaldamento = "Centralizzato"
+
+    condizionatore = "Sì" if any(k in testo_lower for k in ["aria condizionata", "climatizzat", "condizionator"]) else "No / Non specificato"
+
+    vani_match = RE_VANI.search(testo_lower)
+    vani = vani_match.group(0).capitalize() if vani_match else "N/D"
+
+    classe_match = RE_CLASSE.search(testo_lower)
+    classe_energetica = classe_match.group(1).upper() if classe_match else "N/D"
+
+    has_metro = "Sì" if any(k in testo_lower for k in ["metro", "metropolitana"]) else "No / Non specificato"
+
+    linea_metro = "N/D"
+    if re.search(r"\b(linea\s*a|metro\s*a)\b", testo_lower): linea_metro = "Linea A"
+    elif re.search(r"\b(linea\s*b1|metro\s*b1)\b", testo_lower): linea_metro = "Linea B1"
+    elif re.search(r"\b(linea\s*b|metro\s*b)\b", testo_lower): linea_metro = "Linea B"
+    elif re.search(r"\b(linea\s*c|metro\s*c)\b", testo_lower): linea_metro = "Linea C"
+
+    fermata_match = RE_FERMATA.search(testo_lower)
+    fermata_metro = fermata_match.group(1).strip().title() if fermata_match else "N/D"
+
+    treno_match = RE_TRENO.search(testo_lower)
+    if treno_match:
+        stazione_treno = treno_
