@@ -12,7 +12,6 @@ st.set_page_config(page_title="Catalogo Case in Affitto", layout="wide")
 
 FILE_CSV_LOCALE = "case_in_affitto.csv"
 
-# Aggiunta la colonna "Note" prima di "Link"
 COLONNE = [
     "Titolo Casa",
     "Data Inserimento",
@@ -23,6 +22,7 @@ COLONNE = [
     "Spese (€)",
     "Prezzo Totale (€)",
     "Metri Quadri (m²)",
+    "Prezzo al m² (€/m²)",
     "Piano",
     "Ascensore",
     "Riscaldamento",
@@ -37,9 +37,26 @@ COLONNE = [
     "Link",
 ]
 
+def calcola_prezzo_mq(df):
+    """Calcola automaticamente il prezzo al metro quadro."""
+    if "Prezzo al m² (€/m²)" not in df.columns:
+        df["Prezzo al m² (€/m²)"] = 0.0
+    for i, row in df.iterrows():
+        try:
+            tot = float(row["Prezzo Totale (€)"])
+            mq = float(row["Metri Quadri (m²)"])
+            if mq > 0:
+                df.at[i, "Prezzo al m² (€/m²)"] = round(tot / mq, 2)
+            else:
+                df.at[i, "Prezzo al m² (€/m²)"] = 0.0
+        except (ValueError, TypeError):
+            df.at[i, "Prezzo al m² (€/m²)"] = 0.0
+    return df
+
 
 def carica_dati():
     """Carica i dati dal repository GitHub se disponibili i Secrets, altrimenti dal file locale."""
+    df = None
     if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
         try:
             token = st.secrets["GITHUB_TOKEN"]
@@ -49,51 +66,44 @@ def carica_dati():
             res = requests.get(url, headers=headers)
             if res.status_code == 200:
                 content_json = res.json()
-                csv_text = base64.b64decode(content_json["content"]).decode(
-                    "utf-8"
-                )
+                csv_text = base64.b64decode(content_json["content"]).decode("utf-8")
                 df = pd.read_csv(io.StringIO(csv_text))
                 st.session_state["sha"] = content_json["sha"]
-                
-                # Gestione nuove colonne per le case vecchie
-                for col in COLONNE:
-                    if col not in df.columns:
-                        if col == "Visita Effettuata": df[col] = False
-                        elif col == "Voto": df[col] = 0.0
-                        elif col == "Note": df[col] = ""
-                        else: df[col] = "N/D"
-                # Forza i tipi corretti per la tabella
-                df["Visita Effettuata"] = df["Visita Effettuata"].astype(bool)
-                df["Voto"] = pd.to_numeric(df["Voto"], errors='coerce').fillna(0.0)
-                df["Note"] = df["Note"].fillna("")
-                
-                return df[COLONNE]
         except Exception:
             pass
 
-    # Fallback su file CSV locale
-    if os.path.exists(FILE_CSV_LOCALE):
-        df = pd.read_csv(FILE_CSV_LOCALE)
-        
-        # Gestione nuove colonne per le case vecchie
-        for col in COLONNE:
-            if col not in df.columns:
-                if col == "Visita Effettuata": df[col] = False
-                elif col == "Voto": df[col] = 0.0
-                elif col == "Note": df[col] = ""
-                else: df[col] = "N/D"
-        # Forza i tipi corretti per la tabella
-        df["Visita Effettuata"] = df["Visita Effettuata"].astype(bool)
-        df["Voto"] = pd.to_numeric(df["Voto"], errors='coerce').fillna(0.0)
-        df["Note"] = df["Note"].fillna("")
-        
-        return df[COLONNE]
+    if df is None and os.path.exists(FILE_CSV_LOCALE):
+        try:
+            df = pd.read_csv(FILE_CSV_LOCALE)
+        except Exception:
+            pass
 
-    return pd.DataFrame(columns=COLONNE)
+    if df is None:
+        df = pd.DataFrame(columns=COLONNE)
+
+    # Gestione retrocompatibilità per nuove o vecchie colonne
+    for col in COLONNE:
+        if col not in df.columns:
+            if col == "Visita Effettuata": df[col] = False
+            elif col == "Voto": df[col] = 0.0
+            elif col == "Note": df[col] = ""
+            else: df[col] = "N/D"
+
+    # Forza i tipi corretti in modo sicuro
+    df["Visita Effettuata"] = df["Visita Effettuata"].apply(lambda x: True if str(x).lower() == 'true' or x is True else False)
+    df["Voto"] = pd.to_numeric(df["Voto"], errors='coerce').fillna(0.0)
+    df["Note"] = df["Note"].fillna("")
+    
+    # Ricalcola il prezzo al mq
+    df = calcola_prezzo_mq(df)
+    
+    return df[COLONNE]
 
 
 def salva_dati(df):
     """Salva i dati su GitHub se configurato, altrimenti sul file CSV locale."""
+    df = calcola_prezzo_mq(df)
+    
     if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
         try:
             token = st.secrets["GITHUB_TOKEN"]
@@ -103,9 +113,7 @@ def salva_dati(df):
 
             csv_buffer = io.StringIO()
             df.to_csv(csv_buffer, index=False)
-            content_b64 = base64.b64encode(
-                csv_buffer.getvalue().encode("utf-8")
-            ).decode("utf-8")
+            content_b64 = base64.b64encode(csv_buffer.getvalue().encode("utf-8")).decode("utf-8")
 
             payload = {
                 "message": f"Aggiornamento catalogo {datetime.now().strftime('%Y-%m-%d %H:%M')}",
@@ -133,9 +141,7 @@ def estrai_dati(testo):
     testo_lower = testo.lower()
 
     # Prezzo Immobile
-    prezzo_match = re.search(
-        r"(?:€|euro)\s*([\d\.]+)|([\d\.]+)\s*(?:€|euro)", testo_lower
-    )
+    prezzo_match = re.search(r"(?:€|euro)\s*([\d\.]+)|([\d\.]+)\s*(?:€|euro)", testo_lower)
     prezzo = 0.0
     if prezzo_match:
         p_str = (prezzo_match.group(1) or prezzo_match.group(2)).replace(".", "")
@@ -145,9 +151,7 @@ def estrai_dati(testo):
             prezzo = 0.0
 
     # Spese condominiali / Utenze
-    spese_match = re.search(
-        r"(?:spese|condominio|spese condominiali|utenze)\b[^\d]*(\d+)", testo_lower
-    )
+    spese_match = re.search(r"(?:spese|condominio|spese condominiali|utenze)\b[^\d]*(\d+)", testo_lower)
     spese = float(spese_match.group(1)) if spese_match else 0.0
 
     # Prezzo Totale
@@ -155,21 +159,15 @@ def estrai_dati(testo):
 
     # Metri Quadri
     mq_match = re.search(r"(\d+)\s*(?:mq|m2|m²|metri quadri)", testo_lower)
-    mq = int(mq_match.group(1)) if mq_match else "N/D"
+    mq = int(mq_match.group(1)) if mq_match else 0
 
     # Piano
-    piano_match = re.search(
-        r"(\d+)°?\s*piano|piano\s*(\d+|terra|rialzato|attico)", testo_lower
-    )
+    piano_match = re.search(r"(\d+)°?\s*piano|piano\s*(\d+|terra|rialzato|attico)", testo_lower)
     piano = piano_match.group(0).capitalize() if piano_match else "N/D"
 
     # Ascensore
     if "ascensore" in testo_lower:
-        ascensore = (
-            "No"
-            if re.search(r"(senza|no|privo di)\s+ascensore", testo_lower)
-            else "Sì"
-        )
+        ascensore = "No" if re.search(r"(senza|no|privo di)\s+ascensore", testo_lower) else "Sì"
     else:
         ascensore = "N/D"
 
@@ -182,62 +180,32 @@ def estrai_dati(testo):
         riscaldamento = "N/D"
 
     # Condizionatore
-    condizionatore = (
-        "Sì"
-        if any(
-            k in testo_lower
-            for k in ["aria condizionata", "climatizzat", "condizionator"]
-        )
-        else "No / Non specificato"
-    )
+    condizionatore = "Sì" if any(k in testo_lower for k in ["aria condizionata", "climatizzat", "condizionator"]) else "No / Non specificato"
 
     # Numero Vani
-    vani_match = re.search(
-        r"(\d+)\s*(?:locali|vani|camere)|monolocale|bilocale|trilocale|quadrilocale",
-        testo_lower,
-    )
+    vani_match = re.search(r"(\d+)\s*(?:locali|vani|camere)|monolocale|bilocale|trilocale|quadrilocale", testo_lower)
     vani = vani_match.group(0).capitalize() if vani_match else "N/D"
 
     # Classe Energetica
-    classe_match = re.search(
-        r"classe\s*energetica\s*:?\s*([a-g][1-3]?)", testo_lower
-    )
-    classe_energetica = (
-        classe_match.group(1).upper() if classe_match else "N/D"
-    )
+    classe_match = re.search(r"classe\s*energetica\s*:?\s*([a-g][1-3]?)", testo_lower)
+    classe_energetica = classe_match.group(1).upper() if classe_match else "N/D"
 
     # Metro Vicina
-    has_metro = (
-        "Sì"
-        if any(k in testo_lower for k in ["metro", "metropolitana"])
-        else "No / Non specificato"
-    )
+    has_metro = "Sì" if any(k in testo_lower for k in ["metro", "metropolitana"]) else "No / Non specificato"
 
     # Linea Metro
     linea_metro = "N/D"
-    if re.search(r"\b(linea\s*a|metro\s*a)\b", testo_lower):
-        linea_metro = "Linea A"
-    elif re.search(r"\b(linea\s*b1|metro\s*b1)\b", testo_lower):
-        linea_metro = "Linea B1"
-    elif re.search(r"\b(linea\s*b|metro\s*b)\b", testo_lower):
-        linea_metro = "Linea B"
-    elif re.search(r"\b(linea\s*c|metro\s*c)\b", testo_lower):
-        linea_metro = "Linea C"
+    if re.search(r"\b(linea\s*a|metro\s*a)\b", testo_lower): linea_metro = "Linea A"
+    elif re.search(r"\b(linea\s*b1|metro\s*b1)\b", testo_lower): linea_metro = "Linea B1"
+    elif re.search(r"\b(linea\s*b|metro\s*b)\b", testo_lower): linea_metro = "Linea B"
+    elif re.search(r"\b(linea\s*c|metro\s*c)\b", testo_lower): linea_metro = "Linea C"
 
     # Fermata Metro
-    fermata_match = re.search(
-        r"(?:metro|metropolitana)\s*(?:linea\s*[abc1]+)?\s*(?:fermata|stazione)?\s*([a-zàèéìòù\s'-]{3,20})",
-        testo_lower,
-    )
-    fermata_metro = (
-        fermata_match.group(1).strip().title() if fermata_match else "N/D"
-    )
+    fermata_match = re.search(r"(?:metro|metropolitana)\s*(?:linea\s*[abc1]+)?\s*(?:fermata|stazione)?\s*([a-zàèéìòù\s'-]{3,20})", testo_lower)
+    fermata_metro = fermata_match.group(1).strip().title() if fermata_match else "N/D"
 
     # Stazione Treno
-    treno_match = re.search(
-        r"(?:stazione|treno|fl\d|fm\d)\s*(?:di|fs)?\s*([a-zàèéìòù\s'-]{3,25})",
-        testo_lower,
-    )
+    treno_match = re.search(r"(?:stazione|treno|fl\d|fm\d)\s*(?:di|fs)?\s*([a-zàèéìòù\s'-]{3,25})", testo_lower)
     if treno_match:
         stazione_treno = treno_match.group(0).strip().title()
     elif any(k in testo_lower for k in ["stazione", "treno", "ferrovia", "fs"]):
@@ -262,23 +230,21 @@ def estrai_dati(testo):
         "Fermata Metro": fermata_metro,
     }
 
-
 # Interfaccia Streamlit
 st.title("🏠 Catalogo & Gestione Case in Affitto")
-st.write(
-    "Incolla l'annuncio a sinistra o modifica direttamente le celle della tabella in basso."
-)
+st.write("Incolla l'annuncio a sinistra o modifica direttamente le celle della tabella in basso.")
 
+# Caricamento iniziale dati
+df_case = carica_dati()
+
+# --- BARRA LATERALE (AGGIUNTA E FILTRI) ---
 with st.sidebar:
     st.header("➕ Aggiungi Nuova Casa")
-    
     titolo_casa = st.text_input("Titolo Casa", placeholder="Es. Trilocale Piazza Bologna")
     note_casa = st.text_area("Note / Impressioni", placeholder="Es. Molto luminosa, cucina piccola...")
     link = st.text_input("Link (opzionale)")
-    visita_data = st.text_input(
-        "Giorno e Ora Visita", placeholder="Es. Martedì 14/10 ore 18:00"
-    )
-    testo_annuncio = st.text_area("Incolla qui il testo dell'annuncio", height=220)
+    visita_data = st.text_input("Giorno e Ora Visita", placeholder="Es. Martedì 14/10 ore 18:00")
+    testo_annuncio = st.text_area("Incolla qui il testo dell'annuncio", height=180)
 
     if st.button("Analizza e Salva", type="primary"):
         if testo_annuncio.strip():
@@ -292,22 +258,82 @@ with st.sidebar:
             dati["Note"] = note_casa if note_casa else ""
             dati["Link"] = link if link else "-"
 
-            df_attuale = carica_dati()
-            df_nuovo = pd.concat(
-                [pd.DataFrame([dati]), df_attuale], ignore_index=True
-            )[COLONNE]
+            df_nuovo = pd.concat([pd.DataFrame([dati]), df_case], ignore_index=True)[COLONNE]
+            
             if salva_dati(df_nuovo):
                 st.success("Immobile salvato nel catalogo condiviso!")
                 st.rerun()
         else:
             st.error("Inserisci il testo prima di salvare.")
 
-df_case = carica_dati()
-st.subheader(f"📋 Case in Catalogo ({len(df_case)})")
+    st.divider()
+    
+    # --- FILTRI DI RICERCA NELLA SIDEBAR ---
+    st.header("🔍 Filtri Rapidi")
+    ricerca_testo = st.text_input("Cerca nel titolo o note", "")
+    
+    # FIX: Calcolo sicuro del prezzo massimo per evitare crash se ci sono NaN o vuoti
+    if not df_case.empty:
+        max_prezzo_trovato = pd.to_numeric(df_case["Prezzo Totale (€)"], errors='coerce').max()
+        if pd.isna(max_prezzo_trovato):
+            max_prezzo_possibile = 2500
+        else:
+            max_prezzo_possibile = int(max_prezzo_trovato) + 500
+    else:
+        max_prezzo_possibile = 2500
+
+    max_prezzo_possibile = max(max_prezzo_possibile, 1500)
+    
+    filtro_prezzo_max = st.slider("Prezzo Totale Max (€)", 500, max_prezzo_possibile, max_prezzo_possibile, step=50)
+    filtro_solo_da_visitare = st.checkbox("Mostra solo case da visitare")
+    filtro_voto_min = st.slider("Voto Minimo", 0.0, 10.0, 0.0, step=0.5)
+
+# --- DASHBOARD KPI (IN ALTO) ---
+if not df_case.empty:
+    st.markdown("### 📊 Panoramica Rapida")
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    
+    totale_case = len(df_case)
+    
+    prezzi_validi = pd.to_numeric(df_case["Prezzo Totale (€)"], errors='coerce')
+    prezzo_medio = prezzi_validi[prezzi_validi > 0].mean() if not prezzi_validi[prezzi_validi > 0].empty else 0
+    
+    visite_fatte = df_case["Visita Effettuata"].sum() if "Visita Effettuata" in df_case.columns else 0
+    
+    voti_validi = pd.to_numeric(df_case["Voto"], errors='coerce')
+    voto_medio = voti_validi[voti_validi > 0].mean() if not voti_validi[voti_validi > 0].empty else 0
+
+    kpi1.metric("Case in Catalogo", f"{totale_case}")
+    kpi2.metric("Prezzo Totale Medio", f"€ {prezzo_medio:.0f}" if prezzo_medio > 0 else "N/D")
+    kpi3.metric("Visite Effettuate", f"{visite_fatte} / {totale_case}")
+    kpi4.metric("Voto Medio", f"{voto_medio:.1f} ⭐" if voto_medio > 0 else "N/D")
+    
+    st.divider()
+
+# --- APPLICAZIONE FILTRI AL DATAFRAME ---
+df_filtrato = df_case.copy()
+
+if ricerca_testo:
+    df_filtrato = df_filtrato[
+        df_filtrato["Titolo Casa"].str.contains(ricerca_testo, case=False, na=False) |
+        df_filtrato["Note"].str.contains(ricerca_testo, case=False, na=False)
+    ]
+
+df_filtrato = df_filtrato[pd.to_numeric(df_filtrato["Prezzo Totale (€)"], errors='coerce').fillna(0) <= filtro_prezzo_max]
+
+if filtro_solo_da_visitare:
+    df_filtrato = df_filtrato[df_filtrato["Visita Effettuata"] == False]
+
+if filtro_voto_min > 0:
+    df_filtrato = df_filtrato[pd.to_numeric(df_filtrato["Voto"], errors='coerce').fillna(0) >= filtro_voto_min]
+
+
+# --- VISUALIZZAZIONE TABELLA ---
+st.subheader(f"📋 Case in Catalogo ({len(df_filtrato)} filtrate su {len(df_case)} totali)")
 
 if not df_case.empty:
     edited_df = st.data_editor(
-        df_case,
+        df_filtrato,
         num_rows="dynamic",
         use_container_width=True,
         key="data_editor",
@@ -325,6 +351,11 @@ if not df_case.empty:
                 step=0.5,
                 format="%.1f",
             ),
+            "Prezzo al m² (€/m²)": st.column_config.NumberColumn(
+                "Prezzo al m² (€/m²)",
+                help="Calcolato automaticamente",
+                format="€ %.2f",
+            ),
             "Note": st.column_config.TextColumn(
                 "Note",
                 help="Note e impressioni personali",
@@ -338,8 +369,16 @@ if not df_case.empty:
     )
 
     if st.button("💾 Salva Modifiche Tabella", type="primary"):
-        if salva_dati(edited_df):
+        # RIPRISTINATO IL COMPORTAMENTO CORRETTO: 
+        # Aggiorniamo le modifiche fatte nella vista filtrata all'interno del DB COMPLETO
+        df_completo = df_case.copy()
+        for idx, row in edited_df.iterrows():
+            if idx in df_completo.index:
+                df_completo.loc[idx] = row
+                
+        # FIX PRINCIPALE: Salviamo il dataframe *completo*, NON solo le righe filtrate (edited_df)
+        if salva_dati(df_completo): 
             st.success("Sincronizzato con il database!")
             st.rerun()
 else:
-    st.info("Nessuna casa ancora salvata.")
+    st.info("Nessuna casa ancora salvata. Incolla il primo annuncio dalla barra laterale!")
