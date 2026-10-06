@@ -107,15 +107,14 @@ def salva_dati(df):
 def estrai_dati(testo):
     """Estrae le informazioni dall'annuncio usando l'API di Gemini."""
     raw_key = st.secrets.get("GEMINI_API_KEY", "")
-
-    # Pulisce la chiave da eventuali virgolette o spazi accidentali
     api_key = str(raw_key).strip().strip("'").strip('"')
 
     if not api_key:
-        st.error("Chiave API di Gemini mancante o non valida nei Secrets!")
+        st.error("Chiave API di Gemini mancante nei Secrets!")
         return {}
 
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+    # Endpoint aggiornato
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
     headers = {
         "x-goog-api-key": api_key,
@@ -169,7 +168,6 @@ def estrai_dati(testo):
             "text"
         ].strip()
 
-        # Rimuove eventuali marcatori ```json ... ```
         if testo_risposta.startswith("```"):
             testo_risposta = (
                 testo_risposta.split("\n", 1)[1].rsplit("```", 1)[0].strip()
@@ -177,7 +175,6 @@ def estrai_dati(testo):
 
         dati_estratti = json.loads(testo_risposta)
 
-        # Calcolo prezzo totale
         prezzo = float(dati_estratti.get("Prezzo Immobile (€)", 0.0))
         spese = float(dati_estratti.get("Spese (€)", 0.0))
         dati_estratti["Prezzo Totale (€)"] = prezzo + spese
