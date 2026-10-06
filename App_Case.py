@@ -176,15 +176,17 @@ def estrai_dati(testo):
         "Linea Metro": "N/D", "Fermata Metro": "N/D", "Contatto Telefonico": "N/D",
     }
     
+    try:def estrai_dati(testo):
+    """Analizza l'annuncio usando Gemini API ed estrae un dizionario pulito."""
+    api_key = st.secrets.get("GEMINI_API_KEY")
+    if not api_key:
+        st.error("⚠️ GEMINI_API_KEY non trovata nei Secrets di Streamlit.")
+        return None
+
     try:
-        api_key = st.secrets.get("GEMINI_API_KEY")
-        if not api_key:
-            st.error("⚠️ GEMINI_API_KEY non trovata nei Secrets. Aggiungila per analizzare gli annunci.")
-            return fallback_dati
-            
         genai.configure(api_key=api_key)
         
-        # Configuro il modello per rispondere ESCLUSIVAMENTE in formato JSON
+        # Se preferisci, puoi usare anche 'gemini-2.0-flash'
         model = genai.GenerativeModel('gemini-1.5-flash')
         
         prompt = f"""
@@ -203,28 +205,34 @@ def estrai_dati(testo):
         - "MetroVicina": stringa ("Sì", "No / Non specificato")
         - "LineaMetro": stringa (es. "Linea A", "Linea B". Usa "N/D" se non trovata)
         - "FermataMetro": stringa (nome della fermata. Usa "N/D" se non trovata)
-        - "Telefono": stringa (numero di contatto, inclusi i prefissi. Usa "N/D" se non trovato)
+        - "Telefono": stringa (numero di contatto. Usa "N/D" se non trovato)
 
         Testo dell'annuncio:
         '''
         {testo}
         '''
         """
-        
+
         with st.spinner("Intelligenza Artificiale in azione..."):
             response = model.generate_content(
                 prompt,
-                generation_config=genai.GenerationConfig(
-                    response_mime_type="application/json",
-                    temperature=0.1 # Bassa creatività, alta precisione
-                )
+                generation_config={
+                    "response_mime_type": "application/json",
+                    "temperature": 0.1
+                }
             )
-            
-            dati = json.loads(response.text)
-            
+
+            # Sanitizzazione del testo per rimuovere eventuali blocchi di codice markdown
+            res_text = response.text.strip()
+            if res_text.startswith("```"):
+                res_text = re.sub(r"^```(?:json)?\n?", "", res_text)
+                res_text = re.sub(r"\n?```$", "", res_text)
+
+            dati = json.loads(res_text)
+
             prezzo = float(dati.get("Prezzo", 0.0))
             spese = float(dati.get("Spese", 0.0))
-            
+
             return {
                 "Prezzo Immobile (€)": prezzo,
                 "Spese (€)": spese,
@@ -242,10 +250,10 @@ def estrai_dati(testo):
                 "Fermata Metro": str(dati.get("FermataMetro", "N/D")).title(),
                 "Contatto Telefonico": str(dati.get("Telefono", "N/D")),
             }
-            
+
     except Exception as e:
-        st.error(f"Si è verificato un errore durante l'estrazione con l'IA: {e}")
-        return fallback_dati
+        st.error(f"❌ Errore durante l'estrazione con Gemini: {e}")
+        return None
 
 
 # --- INTERFACCIA STREAMLIT ---
@@ -268,26 +276,27 @@ with st.sidebar:
         if testo_annuncio.strip():
             dati = estrai_dati(testo_annuncio)
 
-            dati["Titolo Casa"] = titolo_casa if titolo_casa else "Nuova Casa"
-            # Se l'utente ha inserito a mano un telefono, sovrascriviamo quello trovato dall'IA
-            if contatto_tel.strip():
-                dati["Contatto Telefonico"] = contatto_tel.strip()
-                
-            dati["Data Inserimento"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-            dati["Giorno/Ora Visita"] = visita_data if visita_data else "Da programmare"
-            dati["Visita Effettuata"] = False
-            dati["Voto"] = 0.0
-            dati["Note"] = note_casa if note_casa else ""
-            dati["Link"] = link if link else "-"
+            # Prosegue con il salvataggio SOLO se l'estrazione è andata a buon fine
+            if dati is not None:
+                dati["Titolo Casa"] = titolo_casa if titolo_casa else "Nuova Casa"
+                if contatto_tel.strip():
+                    dati["Contatto Telefonico"] = contatto_tel.strip()
 
-            df_nuovo = pd.concat([pd.DataFrame([dati]), df_case], ignore_index=True)[COLONNE]
+                dati["Data Inserimento"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                dati["Giorno/Ora Visita"] = visita_data if visita_data else "Da programmare"
+                dati["Visita Effettuata"] = False
+                dati["Voto"] = 0.0
+                dati["Note"] = note_casa if note_casa else ""
+                dati["Link"] = link if link else "-"
 
-            if salva_dati(df_nuovo):
-                st.success("Immobile salvato nel catalogo!")
-                st.rerun()
+                df_nuovo = pd.concat([pd.DataFrame([dati]), df_case], ignore_index=True)[COLONNE]
+
+                if salva_dati(df_nuovo):
+                    st.success("Immobile salvato nel catalogo!")
+                    st.rerun()
         else:
             st.error("Inserisci il testo prima di salvare.")
-
+            
     st.divider()
 
     st.header("🔍 Filtri Rapidi")
