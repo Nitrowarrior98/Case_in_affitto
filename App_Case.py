@@ -105,14 +105,23 @@ def salva_dati(df):
 
 
 def estrai_dati(testo):
-    """Estrae le informazioni dall'annuncio usando un LLM via API."""
-    api_key = st.secrets.get("GEMINI_API_KEY")
+    """Estrae le informazioni dall'annuncio usando l'API di Gemini."""
+    raw_key = st.secrets.get("GEMINI_API_KEY", "")
+
+    # Pulisce la chiave da eventuali virgolette o spazi accidentali
+    api_key = str(raw_key).strip().strip("'").strip('"')
 
     if not api_key:
-        st.error("Chiave API di Gemini mancante nei Secrets!")
+        st.error("Chiave API di Gemini mancante o non valida nei Secrets!")
         return {}
 
-    # Prompt con istruzioni precise sul formato JSON desiderato
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+
+    headers = {
+        "x-goog-api-key": api_key,
+        "Content-Type": "application/json",
+    }
+
     prompt = f"""
     Sei un assistente esperto in immobili a Roma. Analizza il seguente annuncio di affitto ed estrai le informazioni.
     Rispondi TASSATIVAMENTE ed ESCLUSIVAMENTE con un oggetto JSON valido (senza blocchi markdown ```json).
@@ -142,19 +151,25 @@ def estrai_dati(testo):
     \"\"\"{testo}\"\"\"
     """
 
-    url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=){api_key}"
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
 
     try:
-        response = requests.post(url, json=payload, timeout=10)
-        data = response.json()
+        response = requests.post(
+            url, headers=headers, json=payload, timeout=15
+        )
 
-        # Estrazione della risposta testo dall'API
+        if response.status_code != 200:
+            st.error(
+                f"Errore API Gemini ({response.status_code}): {response.text}"
+            )
+            return {}
+
+        data = response.json()
         testo_risposta = data["candidates"][0]["content"]["parts"][0][
             "text"
         ].strip()
 
-        # Pulizia da eventuali marcatori markdown
+        # Rimuove eventuali marcatori ```json ... ```
         if testo_risposta.startswith("```"):
             testo_risposta = (
                 testo_risposta.split("\n", 1)[1].rsplit("```", 1)[0].strip()
@@ -162,7 +177,7 @@ def estrai_dati(testo):
 
         dati_estratti = json.loads(testo_risposta)
 
-        # Calcolo automatico del prezzo totale
+        # Calcolo prezzo totale
         prezzo = float(dati_estratti.get("Prezzo Immobile (€)", 0.0))
         spese = float(dati_estratti.get("Spese (€)", 0.0))
         dati_estratti["Prezzo Totale (€)"] = prezzo + spese
