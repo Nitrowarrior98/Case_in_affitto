@@ -388,10 +388,15 @@ if not df_case.empty:
     )
 
     if st.button("💾 Salva Modifiche Tabella", type="primary"):
-        df_completo = df_case.copy()
+        # Troviamo gli indici eliminati dall'utente rispetto alla vista filtrata
+        indici_eliminati = df_filtrato.index.difference(edited_df.index)
+
+        # Rimuoviamo gli indici eliminati dal dataframe principale
+        df_completo = df_case.drop(index=indici_eliminati)
+
+        # Aggiorniamo le righe modificate ed eventuali nuove righe
         for idx, row in edited_df.iterrows():
-            if idx in df_completo.index:
-                df_completo.loc[idx] = row
+            df_completo.loc[idx] = row
 
         if salva_dati(df_completo):
             st.success("Sincronizzato con il database!")
