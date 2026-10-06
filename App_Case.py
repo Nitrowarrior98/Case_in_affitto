@@ -105,7 +105,7 @@ def salva_dati(df):
 
 
 def estrai_dati(testo):
-    """Estrae le informazioni dall'annuncio usando l'API di Gemini."""
+    """Estrae le informazioni dall'annuncio usando l'API di Gemini (modello gemini-3.8-flash)."""
     raw_key = st.secrets.get("GEMINI_API_KEY", "")
     api_key = str(raw_key).strip().strip("'").strip('"')
 
@@ -113,8 +113,8 @@ def estrai_dati(testo):
         st.error("Chiave API di Gemini mancante nei Secrets!")
         return {}
 
-    # Endpoint aggiornato
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+    # Endpoint aggiornato al modello gemini-3.8-flash
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent"
 
     headers = {
         "x-goog-api-key": api_key,
@@ -184,7 +184,6 @@ def estrai_dati(testo):
     except Exception as e:
         st.error(f"Errore durante l'estrazione con LLM: {e}")
         return {}
-
 
 # Interfaccia Streamlit
 st.title("🏠 Catalogo & Gestione Case in Affitto")
