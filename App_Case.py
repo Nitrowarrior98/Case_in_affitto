@@ -1,11 +1,12 @@
 import base64
 import io
 import os
-import re
+import json
 from datetime import datetime
 import pandas as pd
 import requests
 import streamlit as st
+import google.generativeai as genai
 
 # Configurazione Pagina
 st.set_page_config(page_title="Catalogo Case in Affitto", layout="wide")
@@ -47,18 +48,6 @@ COLONNE_NUMERICHE = [
     "Voto",
 ]
 
-# REGEX ESTRAZIONE
-RE_PREZZO = re.compile(r"(?:€|euro)\s*([\d\.]+)|([\d\.]+)\s*(?:€|euro)", re.IGNORECASE)
-RE_SPESE = re.compile(r"(?:spese|condominio|spese condominiali|utenze)\b[^\d]*(\d+)", re.IGNORECASE)
-RE_MQ = re.compile(r"(\d+)\s*(?:mq|m2|m²|metri quadri)", re.IGNORECASE)
-RE_PIANO = re.compile(r"(\d+)°?\s*piano|piano\s*(\d+|terra|rialzato|attico)", re.IGNORECASE)
-RE_VANI = re.compile(r"(\d+)\s*(?:locali|vani|camere)|monolocale|bilocale|trilocale|quadrilocale", re.IGNORECASE)
-RE_CLASSE = re.compile(r"classe\s*energetica\s*:?\s*([a-g][1-3]?)", re.IGNORECASE)
-RE_FERMATA = re.compile(r"(?:metro|metropolitana)\s*(?:linea\s*[abc1]+)?\s*(?:fermata|stazione)?\s*([a-zàèéìòù\s'-]{3,20})", re.IGNORECASE)
-RE_TRENO = re.compile(r"(?:stazione|treno|fl\d|fm\d)\s*(?:di|fs)?\s*([a-zàèéìòù\s'-]{3,25})", re.IGNORECASE)
-RE_TEL = re.compile(r"(\+?39[\s.-]?)?(3\d{2}[\s.-]?\d{3,4}[\s.-]?\d{3,4}|0\d{1,4}[\s.-]?\d{5,8})")
-
-
 def get_github_credentials():
     """Recupera le credenziali in modo sicuro senza far crashare l'app."""
     try:
@@ -68,7 +57,6 @@ def get_github_credentials():
         pass
     return None, None
 
-
 def calcola_prezzo_mq(df):
     if df.empty:
         return df
@@ -76,7 +64,6 @@ def calcola_prezzo_mq(df):
     mq = pd.to_numeric(df["Metri Quadri (m²)"], errors="coerce").fillna(0.0)
     df["Prezzo al m² (€/m²)"] = (prezzo_tot / mq).where(mq > 0, 0.0).round(2)
     return df
-
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _scarica_dati_raw():
@@ -130,13 +117,11 @@ def _scarica_dati_raw():
     df = calcola_prezzo_mq(df)
     return df[COLONNE], sha
 
-
 def carica_dati():
     df, sha = _scarica_dati_raw()
     if sha:
         st.session_state["sha"] = sha
     return df.copy()
-
 
 def salva_dati(df):
     df = calcola_prezzo_mq(df)
@@ -180,84 +165,87 @@ def salva_dati(df):
 
 
 def estrai_dati(testo):
-    testo_lower = testo.lower()
-
-    prezzo_match = RE_PREZZO.search(testo_lower)
-    prezzo = 0.0
-    if prezzo_match:
-        p_str = (prezzo_match.group(1) or prezzo_match.group(2)).replace(".", "")
-        try:
-            prezzo = float(p_str)
-        except ValueError:
-            prezzo = 0.0
-
-    spese_match = RE_SPESE.search(testo_lower)
-    spese = float(spese_match.group(1)) if spese_match else 0.0
-    prezzo_totale = prezzo + spese
-
-    mq_match = RE_MQ.search(testo_lower)
-    mq = float(mq_match.group(1)) if mq_match else 0.0
-
-    piano_match = RE_PIANO.search(testo_lower)
-    piano = piano_match.group(0).capitalize() if piano_match else "N/D"
-
-    ascensore = "N/D"
-    if "ascensore" in testo_lower:
-        ascensore = "No" if re.search(r"(senza|no|privo di)\s+ascensore", testo_lower) else "Sì"
-
-    riscaldamento = "N/D"
-    if "autonomo" in testo_lower:
-        riscaldamento = "Autonomo"
-    elif "centralizzato" in testo_lower:
-        riscaldamento = "Centralizzato"
-
-    condizionatore = "Sì" if any(k in testo_lower for k in ["aria condizionata", "climatizzat", "condizionator"]) else "No / Non specificato"
-
-    vani_match = RE_VANI.search(testo_lower)
-    vani = vani_match.group(0).capitalize() if vani_match else "N/D"
-
-    classe_match = RE_CLASSE.search(testo_lower)
-    classe_energetica = classe_match.group(1).upper() if classe_match else "N/D"
-
-    has_metro = "Sì" if any(k in testo_lower for k in ["metro", "metropolitana"]) else "No / Non specificato"
-
-    linea_metro = "N/D"
-    if re.search(r"\b(linea\s*a|metro\s*a)\b", testo_lower): linea_metro = "Linea A"
-    elif re.search(r"\b(linea\s*b1|metro\s*b1)\b", testo_lower): linea_metro = "Linea B1"
-    elif re.search(r"\b(linea\s*b|metro\s*b)\b", testo_lower): linea_metro = "Linea B"
-    elif re.search(r"\b(linea\s*c|metro\s*c)\b", testo_lower): linea_metro = "Linea C"
-
-    fermata_match = RE_FERMATA.search(testo_lower)
-    fermata_metro = fermata_match.group(1).strip().title() if fermata_match else "N/D"
-
-    treno_match = RE_TRENO.search(testo_lower)
-    if treno_match:
-        stazione_treno = treno_match.group(0).strip().title()
-    elif any(k in testo_lower for k in ["stazione", "treno", "ferrovia", "fs"]):
-        stazione_treno = "Sì (Vicina)"
-    else:
-        stazione_treno = "N/D"
-
-    tel_match = RE_TEL.search(testo)
-    contatto_telefono = tel_match.group(0).strip() if tel_match else "N/D"
-
-    return {
-        "Prezzo Immobile (€)": prezzo,
-        "Spese (€)": spese,
-        "Prezzo Totale (€)": prezzo_totale,
-        "Metri Quadri (m²)": mq,
-        "Piano": piano,
-        "Ascensore": ascensore,
-        "Riscaldamento": riscaldamento,
-        "Condizionatore": condizionatore,
-        "Numero Vani": vani,
-        "Classe Energetica": classe_energetica,
-        "Stazione Treno": stazione_treno,
-        "Metro Vicina": has_metro,
-        "Linea Metro": linea_metro,
-        "Fermata Metro": fermata_metro,
-        "Contatto Telefonico": contatto_telefono,
+    """Analizza l'annuncio usando Gemini API ed estrae un dizionario pulito."""
+    
+    # Valori di fallback in caso di errore
+    fallback_dati = {
+        "Prezzo Immobile (€)": 0.0, "Spese (€)": 0.0, "Prezzo Totale (€)": 0.0,
+        "Metri Quadri (m²)": 0.0, "Piano": "N/D", "Ascensore": "N/D",
+        "Riscaldamento": "N/D", "Condizionatore": "N/D", "Numero Vani": "N/D",
+        "Classe Energetica": "N/D", "Stazione Treno": "N/D", "Metro Vicina": "N/D",
+        "Linea Metro": "N/D", "Fermata Metro": "N/D", "Contatto Telefonico": "N/D",
     }
+    
+    try:
+        api_key = st.secrets.get("GEMINI_API_KEY")
+        if not api_key:
+            st.error("⚠️ GEMINI_API_KEY non trovata nei Secrets. Aggiungila per analizzare gli annunci.")
+            return fallback_dati
+            
+        genai.configure(api_key=api_key)
+        
+        # Configuro il modello per rispondere ESCLUSIVAMENTE in formato JSON
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        prompt = f"""
+        Sei un assistente immobiliare esperto. Analizza il seguente annuncio di affitto ed estrai le informazioni.
+        Rispondi SOLO ed ESCLUSIVAMENTE con un oggetto JSON valido, usando esattamente le seguenti chiavi:
+        - "Prezzo": numero (solo il costo dell'affitto, usa 0.0 se non trovato)
+        - "Spese": numero (spese condominiali/utenze se esplicitate, usa 0.0 se non trovato)
+        - "MQ": numero (metri quadri, usa 0.0 se non trovato)
+        - "Piano": stringa (es. "Terra", "1°", "Attico". Usa "N/D" se non trovato)
+        - "Ascensore": stringa ("Sì", "No", o "N/D")
+        - "Riscaldamento": stringa ("Autonomo", "Centralizzato", o "N/D")
+        - "Condizionatore": stringa ("Sì", "No", o "N/D")
+        - "Vani": stringa (es. "Monolocale", "Bilocale", "3". Usa "N/D" se non trovato)
+        - "Classe": stringa (es. "A", "G". Usa "N/D" se non trovata)
+        - "Treno": stringa (nome della stazione vicina o "Sì", altrimenti "N/D")
+        - "MetroVicina": stringa ("Sì", "No / Non specificato")
+        - "LineaMetro": stringa (es. "Linea A", "Linea B". Usa "N/D" se non trovata)
+        - "FermataMetro": stringa (nome della fermata. Usa "N/D" se non trovata)
+        - "Telefono": stringa (numero di contatto, inclusi i prefissi. Usa "N/D" se non trovato)
+
+        Testo dell'annuncio:
+        '''
+        {testo}
+        '''
+        """
+        
+        with st.spinner("Intelligenza Artificiale in azione..."):
+            response = model.generate_content(
+                prompt,
+                generation_config=genai.GenerationConfig(
+                    response_mime_type="application/json",
+                    temperature=0.1 # Bassa creatività, alta precisione
+                )
+            )
+            
+            dati = json.loads(response.text)
+            
+            prezzo = float(dati.get("Prezzo", 0.0))
+            spese = float(dati.get("Spese", 0.0))
+            
+            return {
+                "Prezzo Immobile (€)": prezzo,
+                "Spese (€)": spese,
+                "Prezzo Totale (€)": prezzo + spese,
+                "Metri Quadri (m²)": float(dati.get("MQ", 0.0)),
+                "Piano": str(dati.get("Piano", "N/D")).capitalize(),
+                "Ascensore": str(dati.get("Ascensore", "N/D")),
+                "Riscaldamento": str(dati.get("Riscaldamento", "N/D")),
+                "Condizionatore": str(dati.get("Condizionatore", "N/D")),
+                "Numero Vani": str(dati.get("Vani", "N/D")).capitalize(),
+                "Classe Energetica": str(dati.get("Classe", "N/D")).upper(),
+                "Stazione Treno": str(dati.get("Treno", "N/D")).title(),
+                "Metro Vicina": str(dati.get("MetroVicina", "N/D")),
+                "Linea Metro": str(dati.get("LineaMetro", "N/D")),
+                "Fermata Metro": str(dati.get("FermataMetro", "N/D")).title(),
+                "Contatto Telefonico": str(dati.get("Telefono", "N/D")),
+            }
+            
+    except Exception as e:
+        st.error(f"Si è verificato un errore durante l'estrazione con l'IA: {e}")
+        return fallback_dati
 
 
 # --- INTERFACCIA STREAMLIT ---
@@ -281,8 +269,10 @@ with st.sidebar:
             dati = estrai_dati(testo_annuncio)
 
             dati["Titolo Casa"] = titolo_casa if titolo_casa else "Nuova Casa"
+            # Se l'utente ha inserito a mano un telefono, sovrascriviamo quello trovato dall'IA
             if contatto_tel.strip():
                 dati["Contatto Telefonico"] = contatto_tel.strip()
+                
             dati["Data Inserimento"] = datetime.now().strftime("%Y-%m-%d %H:%M")
             dati["Giorno/Ora Visita"] = visita_data if visita_data else "Da programmare"
             dati["Visita Effettuata"] = False
