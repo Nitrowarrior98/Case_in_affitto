@@ -17,6 +17,7 @@ COLONNE = [
     "Data Inserimento",
     "Giorno/Ora Visita",
     "Visita Effettuata",
+    "Contatto Telefonico",
     "Voto",
     "Prezzo Immobile (€)",
     "Spese (€)",
@@ -92,7 +93,7 @@ def carica_dati():
                 df[col] = False
             elif col in COLONNE_NUMERICHE:
                 df[col] = 0.0
-            elif col == "Note":
+            elif col in ["Note", "Contatto Telefonico"]:
                 df[col] = ""
             else:
                 df[col] = "N/D"
@@ -108,6 +109,7 @@ def carica_dati():
 
     # Pulisce le stringhe vuote o NaN
     df["Note"] = df["Note"].fillna("")
+    df["Contatto Telefonico"] = df["Contatto Telefonico"].astype(str).fillna("N/D")
 
     # Ricalcola prezzo al metro quadro
     df = calcola_prezzo_mq(df)
@@ -211,6 +213,10 @@ def estrai_dati(testo):
     else:
         stazione_treno = "N/D"
 
+    # Estrazione numero di telefono
+    tel_match = re.search(r"(\+?39[\s.-]?)?(3\d{2}[\s.-]?\d{3,4}[\s.-]?\d{3,4}|0\d{1,4}[\s.-]?\d{5,8})", testo)
+    contatto_telefono = tel_match.group(0).strip() if tel_match else "N/D"
+
     return {
         "Prezzo Immobile (€)": prezzo,
         "Spese (€)": spese,
@@ -226,6 +232,7 @@ def estrai_dati(testo):
         "Metro Vicina": has_metro,
         "Linea Metro": linea_metro,
         "Fermata Metro": fermata_metro,
+        "Contatto Telefonico": contatto_telefono,
     }
 
 
@@ -239,6 +246,7 @@ df_case = carica_dati()
 with st.sidebar:
     st.header("➕ Aggiungi Nuova Casa")
     titolo_casa = st.text_input("Titolo Casa", placeholder="Es. Trilocale Piazza Bologna")
+    contatto_tel = st.text_input("Contatto Telefonico", placeholder="Es. 333 1234567 (opzionale)")
     note_casa = st.text_area("Note / Impressioni", placeholder="Es. Molto luminosa, cucina piccola...")
     link = st.text_input("Link (opzionale)")
     visita_data = st.text_input("Giorno e Ora Visita", placeholder="Es. Martedì 14/10 ore 18:00")
@@ -249,6 +257,8 @@ with st.sidebar:
             dati = estrai_dati(testo_annuncio)
 
             dati["Titolo Casa"] = titolo_casa if titolo_casa else "Nuova Casa"
+            if contatto_tel.strip():
+                dati["Contatto Telefonico"] = contatto_tel.strip()
             dati["Data Inserimento"] = datetime.now().strftime("%Y-%m-%d %H:%M")
             dati["Giorno/Ora Visita"] = visita_data if visita_data else "Da programmare"
             dati["Visita Effettuata"] = False
@@ -267,7 +277,7 @@ with st.sidebar:
     st.divider()
 
     st.header("🔍 Filtri Rapidi")
-    ricerca_testo = st.text_input("Cerca nel titolo o note", "")
+    ricerca_testo = st.text_input("Cerca nel titolo, note o telefono", "")
 
     if not df_case.empty:
         max_p = df_case["Prezzo Totale (€)"].max()
@@ -311,6 +321,7 @@ if ricerca_testo:
     df_filtrato = df_filtrato[
         df_filtrato["Titolo Casa"].str.contains(ricerca_testo, case=False, na=False)
         | df_filtrato["Note"].str.contains(ricerca_testo, case=False, na=False)
+        | df_filtrato["Contatto Telefonico"].str.contains(ricerca_testo, case=False, na=False)
     ]
 
 df_filtrato = df_filtrato[df_filtrato["Prezzo Totale (€)"] <= filtro_prezzo_max]
@@ -335,6 +346,10 @@ if not df_case.empty:
                 "Visita Effettuata",
                 help="Spunta questa casella se hai già visto la casa",
                 default=False,
+            ),
+            "Contatto Telefonico": st.column_config.TextColumn(
+                "Contatto Telefonico",
+                help="Numero di telefono del proprietario o agenzia",
             ),
             "Voto": st.column_config.NumberColumn(
                 "Voto",
