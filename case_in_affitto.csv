@@ -1,6 +1,6 @@
-Data Inserimento,Giorno/Ora Visita,Prezzo Immobile (€),Spese (€),Prezzo Totale (€),Metri Quadri (m²),Piano,Ascensore,Riscaldamento,Condizionatore,Numero Vani,Classe Energetica,Stazione Treno,Metro Vicina,Linea Metro,Fermata Metro,Link/Note
-2026-10-05 23:10,08/10 pomeriggio (proposto 17/17:30),850.0,0.0,850.0,N/D,N/D,N/D,N/D,No / Non specificato,N/D,N/D,Stazione Trastevere,No / Non specificato,N/D,N/D,Casa Marconi
-2026-10-05 23:04,09/10 dalle 12 alle 13,850.0,0.0,850.0,52,N/D,N/D,N/D,No / Non specificato,Bilocale,N/D,Stazione Treno Tiburtina,Sì,Linea B,Quintiliani,Casa Via morello 52
-2026-10-05 23:01,11/10 nel pomeriggio ora TBD,750.0,0.0,750.0,48,N/D,N/D,N/D,No / Non specificato,Bilocale,N/D,N/D,No / Non specificato,N/D,N/D,Casa Monteverde Vigna Pia
-2026-10-05 22:56,07/10 alle 19,900.0,0.0,900.0,55,1 piano,N/D,N/D,No / Non specificato,Bilocale,N/D,Stazione Di Villa Bonelli,No / Non specificato,N/D,N/D,Casa Magliana nuova
-2026-10-05 22:43,13/10 alle ore 18:30,1000.0,20.0,1020.0,30,Terra,No,N/D,Sì,Bilocale,N/D,N/D,SI,C,Pigneto,Casa Pigneto 30 Razzista
+Titolo Casa,Data Inserimento,Giorno/Ora Visita,Visita Effettuata,Voto,Prezzo Immobile (€),Spese (€),Prezzo Totale (€),Metri Quadri (m²),Piano,Ascensore,Riscaldamento,Condizionatore,Numero Vani,Classe Energetica,Stazione Treno,Metro Vicina,Linea Metro,Fermata Metro,Link
+N/D,2026-10-05 23:10,08/10 pomeriggio (proposto 17/17:30),False,0.0,850.0,0.0,850.0,N/D,N/D,N/D,N/D,No / Non specificato,N/D,N/D,Stazione Trastevere,No / Non specificato,N/D,N/D,N/D
+N/D,2026-10-05 23:04,09/10 dalle 12 alle 13,False,0.0,850.0,0.0,850.0,52,N/D,N/D,N/D,No / Non specificato,Bilocale,N/D,Stazione Treno Tiburtina,Sì,Linea B,Quintiliani,N/D
+Casa viale marconi (vicino Hotel H10),2026-10-05 23:01,11/10 nel pomeriggio ora TBD,False,0.0,750.0,0.0,750.0,48,N/D,N/D,N/D,No / Non specificato,Bilocale,N/D,N/D,No / Non specificato,N/D,N/D,N/D
+N/D,2026-10-05 22:56,07/10 alle 19,False,0.0,900.0,0.0,900.0,55,1 piano,N/D,N/D,No / Non specificato,Bilocale,N/D,Stazione Di Villa Bonelli,No / Non specificato,N/D,N/D,N/D
+Casa pigneto razzista 30 mq,2026-10-05 22:43,13/10 alle ore 18:30,False,0.0,1000.0,20.0,1020.0,30,Terra,No,N/D,Sì,Bilocale,N/D,N/D,SI,C,Pigneto,N/D
