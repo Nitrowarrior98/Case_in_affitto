@@ -12,9 +12,13 @@ st.set_page_config(page_title="Catalogo Case in Affitto", layout="wide")
 
 FILE_CSV_LOCALE = "case_in_affitto.csv"
 
+# 1. AGGIORNAMENTO COLONNE (Titolo all'inizio, Voti, Visita, Link alla fine)
 COLONNE = [
+    "Titolo Casa",
     "Data Inserimento",
     "Giorno/Ora Visita",
+    "Visita Effettuata",
+    "Voto",
     "Prezzo Immobile (€)",
     "Spese (€)",
     "Prezzo Totale (€)",
@@ -29,7 +33,7 @@ COLONNE = [
     "Metro Vicina",
     "Linea Metro",
     "Fermata Metro",
-    "Link/Note",
+    "Link",
 ]
 
 
@@ -49,9 +53,17 @@ def carica_dati():
                 )
                 df = pd.read_csv(io.StringIO(csv_text))
                 st.session_state["sha"] = content_json["sha"]
+                
+                # Gestione nuove colonne per le case vecchie
                 for col in COLONNE:
                     if col not in df.columns:
-                        df[col] = "N/D"
+                        if col == "Visita Effettuata": df[col] = False
+                        elif col == "Voto": df[col] = 0.0
+                        else: df[col] = "N/D"
+                # Forza i tipi corretti per la tabella
+                df["Visita Effettuata"] = df["Visita Effettuata"].astype(bool)
+                df["Voto"] = pd.to_numeric(df["Voto"], errors='coerce').fillna(0.0)
+                
                 return df[COLONNE]
         except Exception:
             pass
@@ -59,9 +71,17 @@ def carica_dati():
     # Fallback su file CSV locale
     if os.path.exists(FILE_CSV_LOCALE):
         df = pd.read_csv(FILE_CSV_LOCALE)
+        
+        # Gestione nuove colonne per le case vecchie
         for col in COLONNE:
             if col not in df.columns:
-                df[col] = "N/D"
+                if col == "Visita Effettuata": df[col] = False
+                elif col == "Voto": df[col] = 0.0
+                else: df[col] = "N/D"
+        # Forza i tipi corretti per la tabella
+        df["Visita Effettuata"] = df["Visita Effettuata"].astype(bool)
+        df["Voto"] = pd.to_numeric(df["Voto"], errors='coerce').fillna(0.0)
+        
         return df[COLONNE]
 
     return pd.DataFrame(columns=COLONNE)
@@ -246,7 +266,10 @@ st.write(
 
 with st.sidebar:
     st.header("➕ Aggiungi Nuova Casa")
-    link_nota = st.text_input("Link o Titolo Riferimento (opzionale)")
+    
+    # Nuovi campi aggiunti
+    titolo_casa = st.text_input("Titolo Casa", placeholder="Es. Trilocale Piazza Bologna")
+    link = st.text_input("Link (opzionale)")
     visita_data = st.text_input(
         "Giorno e Ora Visita", placeholder="Es. Martedì 14/10 ore 18:00"
     )
@@ -255,13 +278,14 @@ with st.sidebar:
     if st.button("Analizza e Salva", type="primary"):
         if testo_annuncio.strip():
             dati = estrai_dati(testo_annuncio)
-            dati["Data Inserimento"] = datetime.now().strftime(
-                "%Y-%m-%d %H:%M"
-            )
-            dati["Giorno/Ora Visita"] = (
-                visita_data if visita_data else "Da programmare"
-            )
-            dati["Link/Note"] = link_nota if link_nota else "-"
+            
+            # Compilazione nuovi campi e struttura
+            dati["Titolo Casa"] = titolo_casa if titolo_casa else "Nuova Casa"
+            dati["Data Inserimento"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            dati["Giorno/Ora Visita"] = visita_data if visita_data else "Da programmare"
+            dati["Visita Effettuata"] = False
+            dati["Voto"] = 0.0
+            dati["Link"] = link if link else "-"
 
             df_attuale = carica_dati()
             df_nuovo = pd.concat(
@@ -277,11 +301,31 @@ df_case = carica_dati()
 st.subheader(f"📋 Case in Catalogo ({len(df_case)})")
 
 if not df_case.empty:
+    # 2. CONFIGURAZIONE TABELLA PER MOSTRARE CHECKBOX E VOTI CORRETTAMENTE
     edited_df = st.data_editor(
         df_case,
         num_rows="dynamic",
         use_container_width=True,
         key="data_editor",
+        column_config={
+            "Visita Effettuata": st.column_config.CheckboxColumn(
+                "Visita Effettuata",
+                help="Spunta questa casella se hai già visto la casa",
+                default=False,
+            ),
+            "Voto": st.column_config.NumberColumn(
+                "Voto",
+                help="Dai un voto da 0 a 10 (con scatti di 0.5)",
+                min_value=0.0,
+                max_value=10.0,
+                step=0.5,
+                format="%.1f",
+            ),
+            "Link": st.column_config.LinkColumn(
+                "Link",
+                help="Clicca per aprire l'annuncio",
+            ),
+        }
     )
 
     if st.button("💾 Salva Modifiche Tabella", type="primary"):
