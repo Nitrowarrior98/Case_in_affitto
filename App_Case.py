@@ -105,137 +105,73 @@ def salva_dati(df):
 
 
 def estrai_dati(testo):
-    testo_lower = testo.lower()
+    """Estrae le informazioni dall'annuncio usando un LLM via API."""
+    api_key = st.secrets.get("GEMINI_API_KEY")
 
-    # Prezzo Immobile
-    prezzo_match = re.search(
-        r"(?:€|euro)\s*([\d\.]+)|([\d\.]+)\s*(?:€|euro)", testo_lower
-    )
-    prezzo = 0.0
-    if prezzo_match:
-        p_str = (prezzo_match.group(1) or prezzo_match.group(2)).replace(".", "")
-        try:
-            prezzo = float(p_str)
-        except ValueError:
-            prezzo = 0.0
+    if not api_key:
+        st.error("Chiave API di Gemini mancante nei Secrets!")
+        return {}
 
-    # Spese condominiali / Utenze
-    spese_match = re.search(
-        r"(?:spese|condominio|spese condominiali|utenze)\b[^\d]*(\d+)", testo_lower
-    )
-    spese = float(spese_match.group(1)) if spese_match else 0.0
+    # Prompt con istruzioni precise sul formato JSON desiderato
+    prompt = f"""
+    Sei un assistente esperto in immobili a Roma. Analizza il seguente annuncio di affitto ed estrai le informazioni.
+    Rispondi TASSATIVAMENTE ed ESCLUSIVAMENTE con un oggetto JSON valido (senza blocchi markdown ```json).
 
-    # Prezzo Totale
-    prezzo_totale = prezzo + spese
+    Formato JSON richiesto:
+    {{
+      "Prezzo Immobile (€)": float (solo numero dell'affitto base, es: 850.0),
+      "Spese (€)": float (spese condominiali/utenze se menzionate, altrimenti 0.0),
+      "Metri Quadri (m²)": int o stringa ("N/D" se assente),
+      "Piano": stringa (es: "3° piano", "Piano terra", "Attico", o "N/D"),
+      "Ascensore": stringa ("Sì", "No", o "N/D"),
+      "Riscaldamento": stringa ("Autonomo", "Centralizzato", o "N/D"),
+      "Condizionatore": stringa ("Sì", "No", o "N/D"),
+      "Numero Vani": stringa (es: "Bilocale", "3 locali", "N/D"),
+      "Classe Energetica": stringa (es: "A1", "G", "N/D"),
+      "Stazione Treno": stringa (es: "Stazione Tiburtina", "Sì", "N/D"),
+      "Metro Vicina": stringa ("Sì", "No", o "N/D"),
+      "Linea Metro": stringa ("Linea A", "Linea B", "Linea B1", "Linea C", o "N/D"),
+      "Fermata Metro": stringa (nome della fermata più vicina trovata o dedotta, es: "Bologna", "N/D")
+    }}
 
-    # Metri Quadri
-    mq_match = re.search(r"(\d+)\s*(?:mq|m2|m²|metri quadri)", testo_lower)
-    mq = int(mq_match.group(1)) if mq_match else "N/D"
+    Regole:
+    - Tollerare errori di battitura (es. "spesy condominialz", "ascnsore").
+    - Se l'annuncio cita luoghi noti o piazze vicine (es. "vicino Piazza Bologna"), deduci la metro/fermata corretta se evidente.
 
-    # Piano
-    piano_match = re.search(
-        r"(\d+)°?\s*piano|piano\s*(\d+|terra|rialzato|attico)", testo_lower
-    )
-    piano = piano_match.group(0).capitalize() if piano_match else "N/D"
+    Testo annuncio:
+    \"\"\"{testo}\"\"\"
+    """
 
-    # Ascensore
-    if "ascensore" in testo_lower:
-        ascensore = (
-            "No"
-            if re.search(r"(senza|no|privo di)\s+ascensore", testo_lower)
-            else "Sì"
-        )
-    else:
-        ascensore = "N/D"
+    url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=){api_key}"
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
 
-    # Riscaldamento
-    if "autonomo" in testo_lower:
-        riscaldamento = "Autonomo"
-    elif "centralizzato" in testo_lower:
-        riscaldamento = "Centralizzato"
-    else:
-        riscaldamento = "N/D"
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        data = response.json()
 
-    # Condizionatore
-    condizionatore = (
-        "Sì"
-        if any(
-            k in testo_lower
-            for k in ["aria condizionata", "climatizzat", "condizionator"]
-        )
-        else "No / Non specificato"
-    )
+        # Estrazione della risposta testo dall'API
+        testo_risposta = data["candidates"][0]["content"]["parts"][0][
+            "text"
+        ].strip()
 
-    # Numero Vani
-    vani_match = re.search(
-        r"(\d+)\s*(?:locali|vani|camere)|monolocale|bilocale|trilocale|quadrilocale",
-        testo_lower,
-    )
-    vani = vani_match.group(0).capitalize() if vani_match else "N/D"
+        # Pulizia da eventuali marcatori markdown
+        if testo_risposta.startswith("```"):
+            testo_risposta = (
+                testo_risposta.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+            )
 
-    # Classe Energetica
-    classe_match = re.search(
-        r"classe\s*energetica\s*:?\s*([a-g][1-3]?)", testo_lower
-    )
-    classe_energetica = (
-        classe_match.group(1).upper() if classe_match else "N/D"
-    )
+        dati_estratti = json.loads(testo_risposta)
 
-    # Metro Vicina
-    has_metro = (
-        "Sì"
-        if any(k in testo_lower for k in ["metro", "metropolitana"])
-        else "No / Non specificato"
-    )
+        # Calcolo automatico del prezzo totale
+        prezzo = float(dati_estratti.get("Prezzo Immobile (€)", 0.0))
+        spese = float(dati_estratti.get("Spese (€)", 0.0))
+        dati_estratti["Prezzo Totale (€)"] = prezzo + spese
 
-    # Linea Metro
-    linea_metro = "N/D"
-    if re.search(r"\b(linea\s*a|metro\s*a)\b", testo_lower):
-        linea_metro = "Linea A"
-    elif re.search(r"\b(linea\s*b1|metro\s*b1)\b", testo_lower):
-        linea_metro = "Linea B1"
-    elif re.search(r"\b(linea\s*b|metro\s*b)\b", testo_lower):
-        linea_metro = "Linea B"
-    elif re.search(r"\b(linea\s*c|metro\s*c)\b", testo_lower):
-        linea_metro = "Linea C"
+        return dati_estratti
 
-    # Fermata Metro
-    fermata_match = re.search(
-        r"(?:metro|metropolitana)\s*(?:linea\s*[abc1]+)?\s*(?:fermata|stazione)?\s*([a-zàèéìòù\s'-]{3,20})",
-        testo_lower,
-    )
-    fermata_metro = (
-        fermata_match.group(1).strip().title() if fermata_match else "N/D"
-    )
-
-    # Stazione Treno
-    treno_match = re.search(
-        r"(?:stazione|treno|fl\d|fm\d)\s*(?:di|fs)?\s*([a-zàèéìòù\s'-]{3,25})",
-        testo_lower,
-    )
-    if treno_match:
-        stazione_treno = treno_match.group(0).strip().title()
-    elif any(k in testo_lower for k in ["stazione", "treno", "ferrovia", "fs"]):
-        stazione_treno = "Sì (Vicina)"
-    else:
-        stazione_treno = "N/D"
-
-    return {
-        "Prezzo Immobile (€)": prezzo,
-        "Spese (€)": spese,
-        "Prezzo Totale (€)": prezzo_totale,
-        "Metri Quadri (m²)": mq,
-        "Piano": piano,
-        "Ascensore": ascensore,
-        "Riscaldamento": riscaldamento,
-        "Condizionatore": condizionatore,
-        "Numero Vani": vani,
-        "Classe Energetica": classe_energetica,
-        "Stazione Treno": stazione_treno,
-        "Metro Vicina": has_metro,
-        "Linea Metro": linea_metro,
-        "Fermata Metro": fermata_metro,
-    }
+    except Exception as e:
+        st.error(f"Errore durante l'estrazione con LLM: {e}")
+        return {}
 
 
 # Interfaccia Streamlit
