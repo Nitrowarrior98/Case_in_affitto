@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import math
 import os
 import re
 from datetime import datetime
@@ -76,6 +77,25 @@ def calcola_prezzo_mq(df):
     return df
 
 
+def calcola_distanza_haversine(lat1, lon1, lat2, lon2):
+    """Calcola la distanza in metri e stima i minuti a piedi tra due coordinate."""
+    if lat1 == 0.0 or lon1 == 0.0 or lat2 == 0.0 or lon2 == 0.0:
+        return None
+    R = 6371000  # Raggio della Terra in metri
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+
+    a = math.sin(delta_phi / 2.0) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    metri = int(R * c)
+    minuti_a_piedi = max(1, round(metri / 80))  # Media di ~80 m/minuto a piedi
+    return metri, minuti_a_piedi
+
+
+@st.cache_data(show_spinner=False)
 def ottieni_coordinate(testo_posizione):
     """Converte un indirizzo, una fermata metro o una stazione in latitudine e longitudine."""
     if not testo_posizione or str(testo_posizione).strip().upper() in ["N/D", "", "NONE", "NAN"]:
@@ -143,7 +163,7 @@ def _scarica_dati_raw():
     df["Contatto Telefonico"] = df["Contatto Telefonico"].astype(str).fillna("N/D")
     df["Indirizzo"] = df["Indirizzo"].astype(str).fillna("N/D")
 
-    # Tenta il recupero coordinate per righe vecchie senza coordinate
+    # Recupero coordinate per eventuali righe senza posizione
     for idx, row in df.iterrows():
         if float(row.get("Latitudine", 0.0)) == 0.0 or float(row.get("Longitudine", 0.0)) == 0.0:
             target = row.get("Indirizzo")
@@ -382,89 +402,4 @@ df_filtrato = df_case.copy()
 if ricerca_testo and not df_filtrato.empty:
     df_filtrato = df_filtrato[
         df_filtrato["Titolo Casa"].str.contains(ricerca_testo, case=False, na=False)
-        | df_filtrato["Note"].str.contains(ricerca_testo, case=False, na=False)
-        | df_filtrato["Contatto Telefonico"].str.contains(ricerca_testo, case=False, na=False)
-        | df_filtrato["Indirizzo"].str.contains(ricerca_testo, case=False, na=False)
-    ]
-
-if not df_filtrato.empty:
-    df_filtrato = df_filtrato[df_filtrato["Prezzo Totale (€)"] <= filtro_prezzo_max]
-
-if filtro_solo_da_visitare and not df_filtrato.empty:
-    df_filtrato = df_filtrato[df_filtrato["Visita Effettuata"] == False]
-
-if filtro_voto_min > 0 and not df_filtrato.empty:
-    df_filtrato = df_filtrato[df_filtrato["Voto"] >= filtro_voto_min]
-
-
-# --- SEZIONE MAPPA ---
-st.subheader("🗺️ Mappa Immobili")
-if not df_filtrato.empty:
-    df_mappa = df_filtrato[(df_filtrato["Latitudine"] != 0.0) & (df_filtrato["Longitudine"] != 0.0)]
-    if not df_mappa.empty:
-        st.map(df_mappa, latitude="Latitudine", longitude="Longitudine", use_container_width=True)
-    else:
-        st.info("ℹ️ Nessuna coordinata geografica valida trovata per le case attualmente filtrate.")
-else:
-    st.info("ℹ️ Nessun immobile salvato o filtrato.")
-st.divider()
-
-
-# --- TABELLA DATI ---
-st.subheader(f"📋 Case in Catalogo ({len(df_filtrato)} filtrate su {len(df_case)} totali)")
-
-if not df_case.empty:
-    edited_df = st.data_editor(
-        df_filtrato,
-        num_rows="dynamic",
-        use_container_width=True,
-        key="data_editor",
-        column_config={
-            "Latitudine": None,  # Nascoste per non ingombrare la vista
-            "Longitudine": None,
-            "Visita Effettuata": st.column_config.CheckboxColumn(
-                "Visita Effettuata",
-                help="Spunta questa casella se hai già visto la casa",
-                default=False,
-            ),
-            "Contatto Telefonico": st.column_config.TextColumn(
-                "Contatto Telefonico",
-                help="Numero di telefono del proprietario o agenzia",
-            ),
-            "Voto": st.column_config.NumberColumn(
-                "Voto",
-                help="Dai un voto da 0 a 10 (con scatti di 0.5)",
-                min_value=0.0,
-                max_value=10.0,
-                step=0.5,
-                format="%.1f",
-            ),
-            "Prezzo al m² (€/m²)": st.column_config.NumberColumn(
-                "Prezzo al m² (€/m²)",
-                help="Calcolato automaticamente",
-                format="€ %.2f",
-            ),
-            "Note": st.column_config.TextColumn(
-                "Note",
-                help="Note e impressioni personali",
-                width="large",
-            ),
-            "Link": st.column_config.LinkColumn(
-                "Link",
-                help="Clicca per aprire l'annuncio",
-            ),
-        },
-    )
-
-    if st.button("💾 Salva Modifiche Tabella", type="primary"):
-        indici_eliminati = df_filtrato.index.difference(edited_df.index)
-        df_completo = df_case.drop(index=indici_eliminati)
-
-        for idx, row in edited_df.iterrows():
-            df_completo.loc[idx] = row
-
-        if salva_dati(df_completo):
-            st.success("Sincronizzato con il database!")
-            st.rerun()
-else:
-    st.info("Nessuna casa ancora salvata. Incolla il primo annuncio dalla barra laterale!")
+        | df_filtrato["Note"].str.contains(ricerca_testo, case=False, na=False
