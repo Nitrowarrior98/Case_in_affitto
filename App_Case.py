@@ -76,20 +76,19 @@ def calcola_prezzo_mq(df):
     return df
 
 
-def ottieni_coordinate(indirizzo):
-    """Converte un indirizzo in latitudine e longitudine."""
-    if not indirizzo or str(indirizzo).upper() == "N/D":
+def ottieni_coordinate(testo_posizione):
+    """Converte un indirizzo, una fermata metro o una stazione in latitudine e longitudine."""
+    if not testo_posizione or str(testo_posizione).strip().upper() in ["N/D", "", "NONE", "NAN"]:
         return 0.0, 0.0
     try:
-        geolocator = Nominatim(user_agent="app_affitti_roma_2026")
-        # Aggiungiamo Roma come contesto predefinito se non c'è la città, basandoci sulle tue preferenze
-        query = f"{indirizzo}, Roma, Italia" if "roma" not in str(indirizzo).lower() else indirizzo
+        geolocator = Nominatim(user_agent="app_case_affitto_roma_v3")
+        query = str(testo_posizione).strip()
+        if "roma" not in query.lower():
+            query += ", Roma, Italia"
         location = geolocator.geocode(query, timeout=5)
         if location:
-            return location.latitude, location.longitude
-    except GeocoderTimedOut:
-        pass
-    except Exception:
+            return float(location.latitude), float(location.longitude)
+    except (GeocoderTimedOut, Exception):
         pass
     return 0.0, 0.0
 
@@ -143,6 +142,20 @@ def _scarica_dati_raw():
     df["Note"] = df["Note"].fillna("")
     df["Contatto Telefonico"] = df["Contatto Telefonico"].astype(str).fillna("N/D")
     df["Indirizzo"] = df["Indirizzo"].astype(str).fillna("N/D")
+
+    # Tenta il recupero coordinate per righe vecchie senza coordinate
+    for idx, row in df.iterrows():
+        if float(row.get("Latitudine", 0.0)) == 0.0 or float(row.get("Longitudine", 0.0)) == 0.0:
+            target = row.get("Indirizzo")
+            if not target or str(target).strip().upper() in ["N/D", ""]:
+                target = row.get("Fermata Metro")
+            if not target or str(target).strip().upper() in ["N/D", ""]:
+                target = row.get("Stazione Treno")
+
+            if target and str(target).strip().upper() not in ["N/D", ""]:
+                lat, lon = ottieni_coordinate(target)
+                df.at[idx, "Latitudine"] = lat
+                df.at[idx, "Longitudine"] = lon
 
     df = calcola_prezzo_mq(df)
     return df[COLONNE], sha
@@ -252,7 +265,15 @@ def estrai_dati(testo):
             prezzo = float(dati.get("Prezzo", 0.0))
             spese = float(dati.get("Spese", 0.0))
             indirizzo_estratto = str(dati.get("Indirizzo", "N/D"))
+            fermata_metro = str(dati.get("FermataMetro", "N/D"))
+            stazione_treno = str(dati.get("Treno", "N/D"))
+
+            # Strategia a cascata per trovare le coordinate
             lat, lon = ottieni_coordinate(indirizzo_estratto)
+            if lat == 0.0 and lon == 0.0:
+                lat, lon = ottieni_coordinate(fermata_metro)
+            if lat == 0.0 and lon == 0.0:
+                lat, lon = ottieni_coordinate(stazione_treno)
 
             return {
                 "Prezzo Immobile (€)": prezzo,
@@ -355,7 +376,7 @@ if not df_case.empty:
     st.divider()
 
 
-# --- FILTRAGGIO E TABELLA ---
+# --- FILTRAGGIO ---
 df_filtrato = df_case.copy()
 
 if ricerca_testo and not df_filtrato.empty:
@@ -375,18 +396,21 @@ if filtro_solo_da_visitare and not df_filtrato.empty:
 if filtro_voto_min > 0 and not df_filtrato.empty:
     df_filtrato = df_filtrato[df_filtrato["Voto"] >= filtro_voto_min]
 
-# --- MAPPA INTERATTIVA ---
+
+# --- SEZIONE MAPPA ---
+st.subheader("🗺️ Mappa Immobili")
 if not df_filtrato.empty:
-    # Filtriamo solo le righe che hanno coordinate valide (diverse da 0.0)
     df_mappa = df_filtrato[(df_filtrato["Latitudine"] != 0.0) & (df_filtrato["Longitudine"] != 0.0)]
-    
     if not df_mappa.empty:
-        st.subheader("🗺️ Mappa Immobili")
-        # Mostra la mappa indicando a Streamlit quali colonne usare per le coordinate
         st.map(df_mappa, latitude="Latitudine", longitude="Longitudine", use_container_width=True)
-        st.divider()
+    else:
+        st.info("ℹ️ Nessuna coordinata geografica valida trovata per le case attualmente filtrate.")
+else:
+    st.info("ℹ️ Nessun immobile salvato o filtrato.")
+st.divider()
 
 
+# --- TABELLA DATI ---
 st.subheader(f"📋 Case in Catalogo ({len(df_filtrato)} filtrate su {len(df_case)} totali)")
 
 if not df_case.empty:
@@ -396,7 +420,7 @@ if not df_case.empty:
         use_container_width=True,
         key="data_editor",
         column_config={
-            "Latitudine": None,  # Nascondiamo queste due colonne tecniche dalla tabella visiva
+            "Latitudine": None,  # Nascoste per non ingombrare la vista
             "Longitudine": None,
             "Visita Effettuata": st.column_config.CheckboxColumn(
                 "Visita Effettuata",
@@ -433,13 +457,9 @@ if not df_case.empty:
     )
 
     if st.button("💾 Salva Modifiche Tabella", type="primary"):
-        # Troviamo gli indici eliminati dall'utente rispetto alla vista filtrata
         indici_eliminati = df_filtrato.index.difference(edited_df.index)
-
-        # Rimuoviamo gli indici eliminati dal dataframe principale
         df_completo = df_case.drop(index=indici_eliminati)
 
-        # Aggiorniamo le righe modificate ed eventuali nuove righe
         for idx, row in edited_df.iterrows():
             df_completo.loc[idx] = row
 
