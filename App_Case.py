@@ -8,6 +8,8 @@ import google.generativeai as genai
 import pandas as pd
 import requests
 import streamlit as st
+from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut
 
 # Configurazione Pagina
 st.set_page_config(page_title="Catalogo Case in Affitto", layout="wide")
@@ -20,6 +22,9 @@ COLONNE = [
     "Giorno/Ora Visita",
     "Visita Effettuata",
     "Contatto Telefonico",
+    "Indirizzo",
+    "Latitudine",
+    "Longitudine",
     "Voto",
     "Prezzo Immobile (€)",
     "Spese (€)",
@@ -47,6 +52,8 @@ COLONNE_NUMERICHE = [
     "Metri Quadri (m²)",
     "Prezzo al m² (€/m²)",
     "Voto",
+    "Latitudine",
+    "Longitudine",
 ]
 
 
@@ -67,6 +74,24 @@ def calcola_prezzo_mq(df):
     mq = pd.to_numeric(df["Metri Quadri (m²)"], errors="coerce").fillna(0.0)
     df["Prezzo al m² (€/m²)"] = (prezzo_tot / mq).where(mq > 0, 0.0).round(2)
     return df
+
+
+def ottieni_coordinate(indirizzo):
+    """Converte un indirizzo in latitudine e longitudine."""
+    if not indirizzo or str(indirizzo).upper() == "N/D":
+        return 0.0, 0.0
+    try:
+        geolocator = Nominatim(user_agent="app_affitti_roma_2026")
+        # Aggiungiamo Roma come contesto predefinito se non c'è la città, basandoci sulle tue preferenze
+        query = f"{indirizzo}, Roma, Italia" if "roma" not in str(indirizzo).lower() else indirizzo
+        location = geolocator.geocode(query, timeout=5)
+        if location:
+            return location.latitude, location.longitude
+    except GeocoderTimedOut:
+        pass
+    except Exception:
+        pass
+    return 0.0, 0.0
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -103,7 +128,7 @@ def _scarica_dati_raw():
                 df[col] = False
             elif col in COLONNE_NUMERICHE:
                 df[col] = 0.0
-            elif col in ["Note", "Contatto Telefonico"]:
+            elif col in ["Note", "Contatto Telefonico", "Indirizzo"]:
                 df[col] = ""
             else:
                 df[col] = "N/D"
@@ -117,6 +142,7 @@ def _scarica_dati_raw():
 
     df["Note"] = df["Note"].fillna("")
     df["Contatto Telefonico"] = df["Contatto Telefonico"].astype(str).fillna("N/D")
+    df["Indirizzo"] = df["Indirizzo"].astype(str).fillna("N/D")
 
     df = calcola_prezzo_mq(df)
     return df[COLONNE], sha
@@ -188,6 +214,7 @@ def estrai_dati(testo):
         - "Prezzo": numero (solo il costo dell'affitto, usa 0.0 se non trovato)
         - "Spese": numero (spese condominiali/utenze se esplicitate, usa 0.0 se non trovato)
         - "MQ": numero (metri quadri, usa 0.0 se non trovato)
+        - "Indirizzo": stringa (la via, piazza o quartiere esatto se presente, es. "Via Lorenzo il Magnifico". Usa "N/D" se non trovato)
         - "Piano": stringa (es. "Terra", "1°", "Attico". Usa "N/D" se non trovato)
         - "Ascensore": stringa ("Sì", "No", o "N/D")
         - "Riscaldamento": stringa ("Autonomo", "Centralizzato", o "N/D")
@@ -224,12 +251,17 @@ def estrai_dati(testo):
 
             prezzo = float(dati.get("Prezzo", 0.0))
             spese = float(dati.get("Spese", 0.0))
+            indirizzo_estratto = str(dati.get("Indirizzo", "N/D"))
+            lat, lon = ottieni_coordinate(indirizzo_estratto)
 
             return {
                 "Prezzo Immobile (€)": prezzo,
                 "Spese (€)": spese,
                 "Prezzo Totale (€)": prezzo + spese,
                 "Metri Quadri (m²)": float(dati.get("MQ", 0.0)),
+                "Indirizzo": indirizzo_estratto,
+                "Latitudine": lat,
+                "Longitudine": lon,
                 "Piano": str(dati.get("Piano", "N/D")).capitalize(),
                 "Ascensore": str(dati.get("Ascensore", "N/D")),
                 "Riscaldamento": str(dati.get("Riscaldamento", "N/D")),
@@ -320,7 +352,6 @@ if not df_case.empty:
     kpi2.metric("Prezzo Totale Medio", f"€ {prezzo_medio:.0f}" if prezzo_medio > 0 else "N/D")
     kpi3.metric("Visite Effettuate", f"{visite_fatte} / {totale_case}")
     kpi4.metric("Voto Medio", f"{voto_medio:.1f} ⭐" if voto_medio > 0 else "N/D")
-
     st.divider()
 
 
@@ -332,6 +363,7 @@ if ricerca_testo and not df_filtrato.empty:
         df_filtrato["Titolo Casa"].str.contains(ricerca_testo, case=False, na=False)
         | df_filtrato["Note"].str.contains(ricerca_testo, case=False, na=False)
         | df_filtrato["Contatto Telefonico"].str.contains(ricerca_testo, case=False, na=False)
+        | df_filtrato["Indirizzo"].str.contains(ricerca_testo, case=False, na=False)
     ]
 
 if not df_filtrato.empty:
@@ -343,6 +375,17 @@ if filtro_solo_da_visitare and not df_filtrato.empty:
 if filtro_voto_min > 0 and not df_filtrato.empty:
     df_filtrato = df_filtrato[df_filtrato["Voto"] >= filtro_voto_min]
 
+# --- MAPPA INTERATTIVA ---
+if not df_filtrato.empty:
+    # Filtriamo solo le righe che hanno coordinate valide (diverse da 0.0)
+    df_mappa = df_filtrato[(df_filtrato["Latitudine"] != 0.0) & (df_filtrato["Longitudine"] != 0.0)]
+    
+    if not df_mappa.empty:
+        st.subheader("🗺️ Mappa Immobili")
+        # Mostra la mappa indicando a Streamlit quali colonne usare per le coordinate
+        st.map(df_mappa, latitude="Latitudine", longitude="Longitudine", use_container_width=True)
+        st.divider()
+
 
 st.subheader(f"📋 Case in Catalogo ({len(df_filtrato)} filtrate su {len(df_case)} totali)")
 
@@ -353,6 +396,8 @@ if not df_case.empty:
         use_container_width=True,
         key="data_editor",
         column_config={
+            "Latitudine": None,  # Nascondiamo queste due colonne tecniche dalla tabella visiva
+            "Longitudine": None,
             "Visita Effettuata": st.column_config.CheckboxColumn(
                 "Visita Effettuata",
                 help="Spunta questa casella se hai già visto la casa",
