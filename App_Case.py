@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import math
 import os
 import re
 from datetime import datetime
@@ -76,16 +77,35 @@ def calcola_prezzo_mq(df):
     return df
 
 
+def calcola_distanza_haversine(lat1, lon1, lat2, lon2):
+    """Calcola la distanza in metri e stima i minuti a piedi tra due coordinate."""
+    if lat1 == 0.0 or lon1 == 0.0 or lat2 == 0.0 or lon2 == 0.0:
+        return None
+    R = 6371000  # Raggio della Terra in metri
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    delta_phi = math.radians(lat2 - lat1)
+    delta_lambda = math.radians(lon2 - lon1)
+
+    a = math.sin(delta_phi / 2.0) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    metri = int(R * c)
+    minuti_a_piedi = max(1, round(metri / 80))  # Media di ~80 m/minuto a piedi
+    return metri, minuti_a_piedi
+
+
+@st.cache_data(show_spinner=False, max_entries=200)
 def ottieni_coordinate(testo_posizione):
-    """Converte un indirizzo, una fermata metro o una stazione in latitudine e longitudine."""
+    """Converte un indirizzo, una fermata metro o una stazione in latitudine e longitudine con Cache."""
     if not testo_posizione or str(testo_posizione).strip().upper() in ["N/D", "", "NONE", "NAN"]:
         return 0.0, 0.0
     try:
-        geolocator = Nominatim(user_agent="app_case_affitto_roma_v3")
+        geolocator = Nominatim(user_agent="app_case_affitto_roma_v4_fast")
         query = str(testo_posizione).strip()
         if "roma" not in query.lower():
             query += ", Roma, Italia"
-        location = geolocator.geocode(query, timeout=5)
+        location = geolocator.geocode(query, timeout=3)
         if location:
             return float(location.latitude), float(location.longitude)
     except (GeocoderTimedOut, Exception):
@@ -143,20 +163,6 @@ def _scarica_dati_raw():
     df["Contatto Telefonico"] = df["Contatto Telefonico"].astype(str).fillna("N/D")
     df["Indirizzo"] = df["Indirizzo"].astype(str).fillna("N/D")
 
-    # Tenta il recupero coordinate per righe vecchie senza coordinate
-    for idx, row in df.iterrows():
-        if float(row.get("Latitudine", 0.0)) == 0.0 or float(row.get("Longitudine", 0.0)) == 0.0:
-            target = row.get("Indirizzo")
-            if not target or str(target).strip().upper() in ["N/D", ""]:
-                target = row.get("Fermata Metro")
-            if not target or str(target).strip().upper() in ["N/D", ""]:
-                target = row.get("Stazione Treno")
-
-            if target and str(target).strip().upper() not in ["N/D", ""]:
-                lat, lon = ottieni_coordinate(target)
-                df.at[idx, "Latitudine"] = lat
-                df.at[idx, "Longitudine"] = lon
-
     df = calcola_prezzo_mq(df)
     return df[COLONNE], sha
 
@@ -209,6 +215,7 @@ def salva_dati(df):
     return salvato
 
 
+@st.cache_data(show_spinner=False, max_entries=50)
 def estrai_dati(testo):
     """Analizza l'annuncio usando Gemini API ed estrae un dizionario pulito."""
     api_key = st.secrets.get("GEMINI_API_KEY")
@@ -218,7 +225,6 @@ def estrai_dati(testo):
 
     try:
         genai.configure(api_key=api_key)
-
         model = genai.GenerativeModel("gemini-3.5-flash-lite")
 
         prompt = f"""
@@ -246,55 +252,54 @@ def estrai_dati(testo):
         '''
         """
 
-        with st.spinner("Intelligenza Artificiale in azione..."):
-            response = model.generate_content(
-                prompt,
-                generation_config={
-                    "response_mime_type": "application/json",
-                    "temperature": 0.1,
-                },
-            )
+        response = model.generate_content(
+            prompt,
+            generation_config={
+                "response_mime_type": "application/json",
+                "temperature": 0.1,
+            },
+        )
 
-            res_text = response.text.strip()
-            if res_text.startswith("```"):
-                res_text = re.sub(r"^```(?:json)?\n?", "", res_text)
-                res_text = re.sub(r"\n?```$", "", res_text)
+        res_text = response.text.strip()
+        if res_text.startswith("```"):
+            res_text = re.sub(r"^```(?:json)?\n?", "", res_text)
+            res_text = re.sub(r"\n?```$", "", res_text)
 
-            dati = json.loads(res_text)
+        dati = json.loads(res_text)
 
-            prezzo = float(dati.get("Prezzo", 0.0))
-            spese = float(dati.get("Spese", 0.0))
-            indirizzo_estratto = str(dati.get("Indirizzo", "N/D"))
-            fermata_metro = str(dati.get("FermataMetro", "N/D"))
-            stazione_treno = str(dati.get("Treno", "N/D"))
+        prezzo = float(dati.get("Prezzo", 0.0))
+        spese = float(dati.get("Spese", 0.0))
+        indirizzo_estratto = str(dati.get("Indirizzo", "N/D"))
+        fermata_metro = str(dati.get("FermataMetro", "N/D"))
+        stazione_treno = str(dati.get("Treno", "N/D"))
 
-            # Strategia a cascata per trovare le coordinate
-            lat, lon = ottieni_coordinate(indirizzo_estratto)
-            if lat == 0.0 and lon == 0.0:
-                lat, lon = ottieni_coordinate(fermata_metro)
-            if lat == 0.0 and lon == 0.0:
-                lat, lon = ottieni_coordinate(stazione_treno)
+        # Cascata rapida per il recupero coordinate
+        lat, lon = ottieni_coordinate(indirizzo_estratto)
+        if lat == 0.0 and lon == 0.0:
+            lat, lon = ottieni_coordinate(fermata_metro)
+        if lat == 0.0 and lon == 0.0:
+            lat, lon = ottieni_coordinate(stazione_treno)
 
-            return {
-                "Prezzo Immobile (€)": prezzo,
-                "Spese (€)": spese,
-                "Prezzo Totale (€)": prezzo + spese,
-                "Metri Quadri (m²)": float(dati.get("MQ", 0.0)),
-                "Indirizzo": indirizzo_estratto,
-                "Latitudine": lat,
-                "Longitudine": lon,
-                "Piano": str(dati.get("Piano", "N/D")).capitalize(),
-                "Ascensore": str(dati.get("Ascensore", "N/D")),
-                "Riscaldamento": str(dati.get("Riscaldamento", "N/D")),
-                "Condizionatore": str(dati.get("Condizionatore", "N/D")),
-                "Numero Vani": str(dati.get("Vani", "N/D")).capitalize(),
-                "Classe Energetica": str(dati.get("Classe", "N/D")).upper(),
-                "Stazione Treno": str(dati.get("Treno", "N/D")).title(),
-                "Metro Vicina": str(dati.get("MetroVicina", "N/D")),
-                "Linea Metro": str(dati.get("LineaMetro", "N/D")),
-                "Fermata Metro": str(dati.get("FermataMetro", "N/D")).title(),
-                "Contatto Telefonico": str(dati.get("Telefono", "N/D")),
-            }
+        return {
+            "Prezzo Immobile (€)": prezzo,
+            "Spese (€)": spese,
+            "Prezzo Totale (€)": prezzo + spese,
+            "Metri Quadri (m²)": float(dati.get("MQ", 0.0)),
+            "Indirizzo": indirizzo_estratto,
+            "Latitudine": lat,
+            "Longitudine": lon,
+            "Piano": str(dati.get("Piano", "N/D")).capitalize(),
+            "Ascensore": str(dati.get("Ascensore", "N/D")),
+            "Riscaldamento": str(dati.get("Riscaldamento", "N/D")),
+            "Condizionatore": str(dati.get("Condizionatore", "N/D")),
+            "Numero Vani": str(dati.get("Vani", "N/D")).capitalize(),
+            "Classe Energetica": str(dati.get("Classe", "N/D")).upper(),
+            "Stazione Treno": str(dati.get("Treno", "N/D")).title(),
+            "Metro Vicina": str(dati.get("MetroVicina", "N/D")),
+            "Linea Metro": str(dati.get("LineaMetro", "N/D")),
+            "Fermata Metro": str(dati.get("FermataMetro", "N/D")).title(),
+            "Contatto Telefonico": str(dati.get("Telefono", "N/D")),
+        }
 
     except Exception as e:
         st.error(f"❌ Errore durante l'estrazione con Gemini: {e}")
@@ -319,7 +324,8 @@ with st.sidebar:
 
     if st.button("Analizza e Salva", type="primary"):
         if testo_annuncio.strip():
-            dati = estrai_dati(testo_annuncio)
+            with st.spinner("Intelligenza Artificiale in azione..."):
+                dati = estrai_dati(testo_annuncio)
 
             if dati is not None:
                 dati["Titolo Casa"] = titolo_casa if titolo_casa else "Nuova Casa"
@@ -397,16 +403,54 @@ if filtro_voto_min > 0 and not df_filtrato.empty:
     df_filtrato = df_filtrato[df_filtrato["Voto"] >= filtro_voto_min]
 
 
-# --- SEZIONE MAPPA ---
-st.subheader("🗺️ Mappa Immobili")
+# --- SEZIONE MAPPA (CASE + METRO DOPPIO PUNTO) ---
+st.subheader("🗺️ Mappa Immobili & Fermate Metro")
 if not df_filtrato.empty:
-    df_mappa = df_filtrato[(df_filtrato["Latitudine"] != 0.0) & (df_filtrato["Longitudine"] != 0.0)]
-    if not df_mappa.empty:
-        st.map(df_mappa, latitude="Latitudine", longitude="Longitudine", use_container_width=True)
+    punti_mappa = []
+    info_distanze = []
+
+    for idx, row in df_filtrato.iterrows():
+        c_lat = float(row.get("Latitudine", 0.0))
+        c_lon = float(row.get("Longitudine", 0.0))
+        titolo = str(row.get("Titolo Casa", "Casa"))
+        fermata = str(row.get("Fermata Metro", "N/D")).strip()
+
+        if c_lat != 0.0 and c_lon != 0.0:
+            # 🔴 Punto Casa (Rosso)
+            punti_mappa.append({
+                "Latitudine": c_lat,
+                "Longitudine": c_lon,
+                "color": "#E63946",
+            })
+
+            # 🔵 Punto Metro (Blu) + Calcolo Distanza Istantaneo
+            if fermata and fermata.upper() not in ["N/D", "NONE", ""]:
+                m_lat, m_lon = ottieni_coordinate(f"Stazione Metro {fermata}")
+                if m_lat != 0.0 and m_lon != 0.0:
+                    dist_info = calcola_distanza_haversine(c_lat, c_lon, m_lat, m_lon)
+                    if dist_info:
+                        metri, min_piedi = dist_info
+                        info_distanze.append(f"• **{titolo}** ➔ Metro **{fermata}**: ~{metri} metri (**{min_piedi} min a piedi**)")
+
+                    punti_mappa.append({
+                        "Latitudine": m_lat,
+                        "Longitudine": m_lon,
+                        "color": "#1D3557",
+                    })
+
+    if punti_mappa:
+        df_mappa = pd.DataFrame(punti_mappa)
+        st.map(df_mappa, latitude="Latitudine", longitude="Longitudine", color="color", use_container_width=True)
+
+        if info_distanze:
+            with st.expander("🚶‍♂️ Dettaglio distanze a piedi dalle fermate Metro", expanded=True):
+                for info in info_distanze:
+                    st.markdown(info)
     else:
         st.info("ℹ️ Nessuna coordinata geografica valida trovata per le case attualmente filtrate.")
 else:
     st.info("ℹ️ Nessun immobile salvato o filtrato.")
+
 st.divider()
 
 
@@ -420,7 +464,7 @@ if not df_case.empty:
         use_container_width=True,
         key="data_editor",
         column_config={
-            "Latitudine": None,  # Nascoste per non ingombrare la vista
+            "Latitudine": None,
             "Longitudine": None,
             "Visita Effettuata": st.column_config.CheckboxColumn(
                 "Visita Effettuata",
